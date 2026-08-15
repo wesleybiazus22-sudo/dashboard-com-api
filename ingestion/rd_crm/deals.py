@@ -1,14 +1,13 @@
 """
 Sincronização de negociações (deals) do RD CRM.
 
-Formato dos campos conforme a documentação oficial (developers.rdstation.com/reference/
-crm-v2-list-deals): as propriedades filtráveis via RDQL -- organization_id, contact_id,
-stage_id, lost_reason_id, campaign_id, owner_id, pipeline_id -- são campos DIRETOS no
-objeto da negociação (não objetos aninhados como "deal_stage"/"organization", que era a
-suposição anterior e causava 401/dados vazios). O nome exato do campo de valor monetário
-(amount vs total_price) ainda não está 100% confirmado -- `extract_deal_fields` tenta as
-duas. Rode `python -m scripts.dump_sample deals` e confira contra este dict se algo não
-bater; é o único lugar que precisa mudar.
+Formato confirmado via `python -m scripts.dump_sample deals` (payload real): os campos
+sao diretos no objeto da negociacao -- pipeline_id, stage_id, owner_id, organization_id,
+lost_reason_id, source_id, contact_ids (lista; usamos o primeiro como contato principal)
+-- e nao objetos aninhados como "deal_stage"/"organization", que era a suposicao inicial
+e causava 401/dados vazios. Valor monetario vem em `total_price` (nao ha campo "amount").
+Campos ainda nao observados num payload real (campaign_id, expected_close_date) mantem
+fallback defensivo -- reconfirme com `dump_sample` se algo mudar.
 """
 
 from datetime import datetime, timezone
@@ -34,7 +33,7 @@ def extract_deal_fields(item: dict) -> dict:
         "contact_rd_id": item.get("contact_id") or (item.get("contact_ids") or [None])[0],
         "current_owner_rd_id": item.get("owner_id"),
         "campaign": item.get("campaign_id"),
-        "source": item.get("source") or item.get("deal_source"),
+        "source": item.get("source_id"),
         "lost_reason_rd_id": item.get("lost_reason_id"),
         "deal_created_at": parse_dt(item.get("created_at")),
         "deal_updated_at": parse_dt(item.get("updated_at")),
