@@ -13,7 +13,17 @@ Reaplique sempre que uma etapa nova for criada em algum pipeline no RD Station.
 """
 
 from database.connection import session_scope
-from database.models import CrmStage
+from database.models import CrmPipeline, CrmStage
+
+# pipeline_id (rd_id) -> grupo de produto. Une pipelines do mesmo produto (ex:
+# Qualificação + Closer da Máquina ISP) num funil so. Pipelines fora deste dict
+# (Projetos/Alocações, Relacionamento/CS) ficam de fora do funil de vendas por
+# decisão do usuário -- nao aparecem no dashboard comercial por enquanto.
+PIPELINE_GROUP_MAPPING: dict[str, str] = {
+    "687fe8cbd5677c001aa540b2": "Máquina ISP",  # [Máquina ISP] - Qualificação
+    "6a455fb78017b2001dacd8ed": "Máquina ISP",  # [Máquina ISP] Closer
+    "6a42569b40a047001d6ce6ad": "ThunderIA",  # [ThunderIA] - Closer
+}
 
 # stage_id (rd_id) -> canonical_stage
 STAGE_MAPPING: dict[str, str] = {
@@ -40,19 +50,29 @@ STAGE_MAPPING: dict[str, str] = {
 }
 
 
-def apply_canonical_mapping() -> int:
-    updated = 0
+def apply_canonical_mapping() -> tuple[int, int]:
+    stages_updated = 0
+    pipelines_updated = 0
     with session_scope() as db:
+        for pipeline_id, group in PIPELINE_GROUP_MAPPING.items():
+            pipeline = db.query(CrmPipeline).filter(CrmPipeline.rd_id == pipeline_id).one_or_none()
+            if pipeline is None:
+                print(f"  aviso: pipeline_id {pipeline_id} nao encontrado em crm_pipelines (ignorado)")
+                continue
+            pipeline.product_group = group
+            pipelines_updated += 1
+
         for stage_id, canonical in STAGE_MAPPING.items():
             stage = db.query(CrmStage).filter(CrmStage.rd_id == stage_id).one_or_none()
             if stage is None:
                 print(f"  aviso: stage_id {stage_id} nao encontrado em crm_stages (ignorado)")
                 continue
             stage.canonical_stage = canonical
-            updated += 1
-    return updated
+            stages_updated += 1
+
+    return pipelines_updated, stages_updated
 
 
 if __name__ == "__main__":
-    n = apply_canonical_mapping()
-    print(f"{n} etapas mapeadas para o funil canonico.")
+    p, s = apply_canonical_mapping()
+    print(f"{p} pipelines agrupados, {s} etapas mapeadas para o funil canonico.")

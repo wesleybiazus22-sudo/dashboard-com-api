@@ -119,6 +119,10 @@ class CrmPipeline(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     rd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Agrupa pipelines do mesmo produto (ex: "[Máquina ISP] - Qualificação" e
+    # "[Máquina ISP] Closer" viram um funil so). Preenchido por
+    # ingestion/canonical_funnel.py, nao pela API do RD.
+    product_group: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 

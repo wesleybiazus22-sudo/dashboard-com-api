@@ -1,4 +1,7 @@
 .env
+# Projeto separado do usuario que vive dentro desta mesma pasta -- nao pertence
+# ao repositorio da API (tem inclusive seu proprio repositorio git quebrado dentro).
+Dashboard Acompanhamento Marketing/
 __pycache__/
 *.pyc
 .venv/
