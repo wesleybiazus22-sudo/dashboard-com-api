@@ -13,7 +13,6 @@ def sync_contacts(db: Session, updated_since: str | None = None) -> int:
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
-        organization = item.get("organization") or {}
         emails = item.get("emails") or []
         phones = item.get("phones") or []
 
@@ -25,7 +24,7 @@ def sync_contacts(db: Session, updated_since: str | None = None) -> int:
                 "name": item.get("name"),
                 "email": (emails[0].get("email") if emails else item.get("email")),
                 "phone": (phones[0].get("phone") if phones else item.get("phone")),
-                "organization_rd_id": organization.get("id"),
+                "organization_rd_id": item.get("organization_id"),
                 "raw": item,
             },
         )

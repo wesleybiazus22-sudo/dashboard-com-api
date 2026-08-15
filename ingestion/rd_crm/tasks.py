@@ -13,6 +13,9 @@ def sync_tasks(db: Session, updated_since: str | None = None) -> int:
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
+        # Padrao confirmado em deals/contacts: campos de referencia vem diretos
+        # (deal_id, user_id), nao aninhados. Mantemos fallback aninhado por seguranca
+        # ate confirmar com `python -m scripts.dump_sample tasks`.
         deal = item.get("deal") or {}
         owner = item.get("user") or item.get("owner") or {}
 
@@ -21,10 +24,10 @@ def sync_tasks(db: Session, updated_since: str | None = None) -> int:
             CrmTask,
             item["id"],
             {
-                "deal_rd_id": deal.get("id"),
+                "deal_rd_id": item.get("deal_id") or deal.get("id"),
                 "type": item.get("type"),
                 "subject": item.get("subject") or item.get("text"),
-                "owner_rd_id": owner.get("id"),
+                "owner_rd_id": item.get("user_id") or item.get("owner_id") or owner.get("id"),
                 "status": item.get("status") or ("done" if item.get("done") else "pending"),
                 "due_at": parse_dt(item.get("due_date") or item.get("date")),
                 "completed_at": parse_dt(item.get("finished_at") or item.get("done_at")),

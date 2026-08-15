@@ -19,7 +19,9 @@ def sync_organizations(db: Session, updated_since: str | None = None) -> int:
             item["id"],
             {
                 "name": item.get("name"),
-                "segment": (item.get("segment") or {}).get("name") if isinstance(item.get("segment"), dict) else item.get("segment"),
+                # A API expoe so "segment_ids" (lista de ids), sem nome resolvido na
+                # listagem -- fica None aqui; os ids continuam preservados em "raw".
+                "segment": None,
                 "raw": item,
             },
         )
