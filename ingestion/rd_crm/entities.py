@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session
 
 
 def upsert_by_rd_id(db: Session, model, rd_id: str, values: dict):
-    """Insere ou atualiza uma linha pela chave natural rd_id (idempotente)."""
+    """Insere ou atualiza uma linha pela chave natural rd_id (idempotente).
+
+    A sessao usa autoflush=False, entao sem o flush() explicito abaixo um rd_id que
+    aparece duas vezes no mesmo lote (ex: o mesmo registro caindo em duas paginas
+    porque a base do RD estava sendo atualizada durante a sincronizacao) nao seria
+    encontrado na segunda vez -- gerando um INSERT duplicado e violando a constraint
+    unique de rd_id. O flush torna a linha recem-adicionada visivel para a proxima
+    consulta dentro da mesma transacao, sem precisar commitar.
+    """
     obj = db.query(model).filter(model.rd_id == rd_id).one_or_none()
     if obj is None:
         obj = model(rd_id=rd_id)
@@ -15,6 +23,7 @@ def upsert_by_rd_id(db: Session, model, rd_id: str, values: dict):
         setattr(obj, key, value)
     if hasattr(obj, "synced_at"):
         obj.synced_at = datetime.utcnow()
+    db.flush()
     return obj
 
 
