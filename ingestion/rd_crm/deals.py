@@ -58,6 +58,7 @@ def _seed_history_if_missing(db: Session, deal: CrmDeal, fields: dict) -> None:
                 deal_id=deal.id,
                 deal_rd_id=deal.rd_id,
                 stage_rd_id=fields["stage_rd_id"],
+                pipeline_rd_id=fields["pipeline_rd_id"],
                 owner_rd_id=fields["current_owner_rd_id"],
                 entered_at=baseline_at,
             )

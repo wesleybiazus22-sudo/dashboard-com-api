@@ -19,7 +19,14 @@ from database.models import CrmDeal, CrmDealEvent, CrmDealOwnerHistory, CrmDealS
 from ingestion.rd_crm.deals import extract_deal_fields
 from ingestion.rd_crm.entities import upsert_by_rd_id
 
-TRACKED_FIELDS = ["stage_rd_id", "status", "amount", "lost_reason_rd_id", "current_owner_rd_id"]
+TRACKED_FIELDS = [
+    "stage_rd_id",
+    "pipeline_rd_id",
+    "status",
+    "amount",
+    "lost_reason_rd_id",
+    "current_owner_rd_id",
+]
 
 
 def _extract_deal_payload(payload: dict) -> dict:
@@ -115,6 +122,7 @@ def process_deal_webhook(db: Session, event_type: str, payload: dict) -> None:
                     deal_id=previous.id,
                     deal_rd_id=rd_id,
                     stage_rd_id=new_fields.get("stage_rd_id"),
+                    pipeline_rd_id=new_fields.get("pipeline_rd_id"),
                     owner_rd_id=new_fields.get("current_owner_rd_id"),
                     entered_at=at,
                 )
@@ -140,6 +148,7 @@ def process_deal_webhook(db: Session, event_type: str, payload: dict) -> None:
                 deal_id=deal.id,
                 deal_rd_id=rd_id,
                 stage_rd_id=new_fields.get("stage_rd_id"),
+                pipeline_rd_id=new_fields.get("pipeline_rd_id"),
                 owner_rd_id=new_fields.get("current_owner_rd_id"),
                 entered_at=new_fields.get("deal_created_at") or at,
             )

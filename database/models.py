@@ -204,6 +204,10 @@ class CrmDealStageHistory(Base):
     deal_id: Mapped[str] = mapped_column(String, ForeignKey("crm_deals.id"), nullable=False, index=True)
     deal_rd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     stage_rd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Denormalizado (stage_id ja implica o pipeline) para facilitar queries de funil
+    # sem precisar de join -- tambem torna visivel a troca de pipeline (handoff SDR->
+    # closer nesta conta acontece movendo a mesma negociacao entre pipelines).
+    pipeline_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     owner_rd_id: Mapped[str | None] = mapped_column(String, nullable=True)  # dono no momento da etapa
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     exited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
