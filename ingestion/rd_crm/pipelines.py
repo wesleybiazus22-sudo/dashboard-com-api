@@ -5,13 +5,14 @@ from ingestion.rd_crm.client import RDCrmClient
 from ingestion.rd_crm.entities import upsert_by_rd_id
 
 # Confirmado via docs oficiais: GET /crm/v2/pipelines. O objeto pipeline NAO traz as
-# etapas aninhadas -- so um array "stage_ids". Buscamos cada etapa individualmente em
-# /deal_stages/{id} (nome herdado da API v1; nao ha endpoint v2 de listagem de etapas
-# documentado publicamente no momento). Se esse endpoint nao existir para sua conta,
-# a etapa fica sem nome/order mas o stage_id continua correto e linkado nas
-# negociacoes -- valide com `python -m scripts.dump_sample pipelines` e ajuste aqui.
+# etapas aninhadas -- so um array "stage_ids". As etapas ficam ANINHADAS SOB O PIPELINE
+# (confirmado pelo endpoint de update: PATCH /pipelines/{pipeline_id}/stages/{id}) --
+# nao existem soltas em /deal_stages/{id} (tentativa anterior, sempre 404). Tentamos
+# primeiro a listagem completa por pipeline; se nao existir para a conta, caimos pra
+# busca individual por id.
 PIPELINES_ENDPOINT = "/pipelines"
-STAGE_ENDPOINT = "/deal_stages/{id}"
+STAGES_LIST_ENDPOINT = "/pipelines/{pipeline_id}/stages"
+STAGE_GET_ENDPOINT = "/pipelines/{pipeline_id}/stages/{id}"
 
 
 def sync_pipelines_and_stages(db: Session) -> tuple[int, int]:
@@ -28,13 +29,23 @@ def sync_pipelines_and_stages(db: Session) -> tuple[int, int]:
         )
         pipelines_count += 1
 
-        for stage_id in pipeline.get("stage_ids") or []:
-            try:
-                stage = client.get(STAGE_ENDPOINT.format(id=stage_id))
-            except Exception:
-                # Endpoint de etapa individual pode nao existir/ter outro path nesta
-                # conta -- registramos so o id, sem travar o resto da sincronizacao.
-                stage = {"id": stage_id}
+        stage_ids = pipeline.get("stage_ids") or []
+        stages_by_id: dict[str, dict] = {}
+        try:
+            for stage in client.paginate(STAGES_LIST_ENDPOINT.format(pipeline_id=pipeline["id"])):
+                stages_by_id[stage["id"]] = stage
+        except Exception:
+            pass  # cai pro fallback de busca individual abaixo
+
+        for stage_id in stage_ids:
+            stage = stages_by_id.get(stage_id)
+            if stage is None:
+                try:
+                    stage = client.get(STAGE_GET_ENDPOINT.format(pipeline_id=pipeline["id"], id=stage_id))
+                except Exception:
+                    # Nenhuma das duas formas funcionou pra essa conta -- registramos
+                    # so o id, sem travar o resto da sincronizacao.
+                    stage = {"id": stage_id}
 
             upsert_by_rd_id(
                 db,
@@ -42,7 +53,7 @@ def sync_pipelines_and_stages(db: Session) -> tuple[int, int]:
                 stage_id,
                 {
                     "pipeline_rd_id": pipeline["id"],
-                    "name": stage.get("name"),
+                    "name": stage.get("name") or stage.get("nickname"),
                     "order": stage.get("order") or stage.get("nickname_order"),
                     "raw": stage,
                 },
