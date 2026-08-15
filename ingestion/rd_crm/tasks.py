@@ -9,7 +9,10 @@ ENDPOINT = "/tasks"
 
 def sync_tasks(db: Session, updated_since: str | None = None) -> int:
     client = RDCrmClient(db)
-    params = {"filter": f"updated_at:>{updated_since}"} if updated_since else None
+    # O endpoint /tasks devolve 500 com filter=updated_at:>... (mesma sintaxe que
+    # funciona em /deals, /organizations, /contacts). Ate confirmar a causa, ignoramos
+    # `updated_since` e buscamos a lista completa -- aceitavel pro volume de tarefas.
+    params = None
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):

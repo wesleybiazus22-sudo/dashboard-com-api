@@ -11,7 +11,9 @@ ENDPOINT = "/meetings"
 
 def sync_meetings(db: Session, updated_since: str | None = None) -> int:
     client = RDCrmClient(db)
-    params = {"filter": f"updated_at:>{updated_since}"} if updated_since else None
+    # Mesmo problema de /tasks: o filtro RDQL devolve 500 nesse endpoint. Busca
+    # completa por enquanto -- ver comentario equivalente em tasks.py.
+    params = None
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
