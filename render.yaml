@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: dashboard-com-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: RD_CRM_CLIENT_ID
+        sync: false
+      - key: RD_CRM_CLIENT_SECRET
+        sync: false
+      - key: RD_CRM_REDIRECT_URI
+        sync: false
+      - key: RD_WEBHOOK_TOKEN
+        sync: false
+      - key: RD_AUTH_DIALOG_URL
+        value: https://api.rd.services/auth/dialog
+      - key: RD_TOKEN_URL
+        value: https://api.rd.services/auth/token
+      - key: RD_CRM_API_BASE_URL
+        value: https://api.rd.services/crm/v2
+      - key: ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
