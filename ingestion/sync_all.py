@@ -82,26 +82,32 @@ def run_incremental_sync() -> None:
         lost_reasons_sync.sync_lost_reasons(db)
 
         since = _get_last_synced_at(db, "organizations")
-        n = organizations_sync.sync_organizations(db, updated_since=since.isoformat() if since else None)
+        n = organizations_sync.sync_organizations(
+            db, updated_since=since.isoformat(timespec="seconds") if since else None
+        )
         print(f"  {n} empresas atualizadas")
 
         since = _get_last_synced_at(db, "contacts")
-        n = contacts_sync.sync_contacts(db, updated_since=since.isoformat() if since else None)
+        n = contacts_sync.sync_contacts(
+            db, updated_since=since.isoformat(timespec="seconds") if since else None
+        )
         print(f"  {n} contatos atualizados")
 
         since = _get_last_synced_at(db, "deals")
         if since is None:
             n = deals_sync.sync_deals_full(db)
         else:
-            n = deals_sync.sync_deals_incremental(db, updated_since_iso=since.isoformat())
+            n = deals_sync.sync_deals_incremental(db, updated_since_iso=since.isoformat(timespec="seconds"))
         print(f"  {n} negociacoes atualizadas")
 
         since = _get_last_synced_at(db, "tasks")
-        n = tasks_sync.sync_tasks(db, updated_since=since.isoformat() if since else None)
+        n = tasks_sync.sync_tasks(db, updated_since=since.isoformat(timespec="seconds") if since else None)
         print(f"  {n} tarefas atualizadas")
 
         since = _get_last_synced_at(db, "meetings")
-        n = meetings_sync.sync_meetings(db, updated_since=since.isoformat() if since else None)
+        n = meetings_sync.sync_meetings(
+            db, updated_since=since.isoformat(timespec="seconds") if since else None
+        )
         print(f"  {n} reunioes atualizadas")
 
     with session_scope() as db:
