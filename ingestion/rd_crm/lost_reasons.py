@@ -4,7 +4,7 @@ from database.models import CrmLostReason
 from ingestion.rd_crm.client import RDCrmClient
 from ingestion.rd_crm.entities import upsert_by_rd_id
 
-ENDPOINT = "/deal_lost_reasons"
+ENDPOINT = "/lost_reasons"
 
 
 def sync_lost_reasons(db: Session) -> int:

@@ -25,19 +25,27 @@ def get_authorization_url() -> str:
     """URL para o usuário abrir no navegador e autorizar o app no RD Station."""
     return (
         f"{settings.rd_auth_dialog_url}"
-        f"?client_id={settings.rd_crm_client_id}"
+        f"?response_type=code"
+        f"&client_id={settings.rd_crm_client_id}"
         f"&redirect_uri={settings.rd_crm_redirect_uri}"
     )
 
 
 def exchange_code_for_token(db: Session, code: str) -> OAuthToken:
-    """Primeira troca: authorization code -> access_token + refresh_token."""
+    """Primeira troca: authorization code -> access_token + refresh_token.
+
+    IMPORTANTE: o endpoint de token do RD Station espera o corpo em
+    application/x-www-form-urlencoded (nao JSON) -- httpx faz isso
+    automaticamente quando passamos `data=` em vez de `json=`.
+    """
     response = httpx.post(
         settings.rd_token_url,
-        json={
+        data={
             "client_id": settings.rd_crm_client_id,
             "client_secret": settings.rd_crm_client_secret,
             "code": code,
+            "redirect_uri": settings.rd_crm_redirect_uri,
+            "grant_type": "authorization_code",
         },
         timeout=30,
     )
@@ -49,10 +57,11 @@ def exchange_code_for_token(db: Session, code: str) -> OAuthToken:
 def _refresh_token(db: Session, refresh_token: str) -> OAuthToken:
     response = httpx.post(
         settings.rd_token_url,
-        json={
+        data={
             "client_id": settings.rd_crm_client_id,
             "client_secret": settings.rd_crm_client_secret,
             "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
         },
         timeout=30,
     )

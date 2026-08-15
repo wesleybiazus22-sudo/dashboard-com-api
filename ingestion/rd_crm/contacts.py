@@ -9,7 +9,7 @@ ENDPOINT = "/contacts"
 
 def sync_contacts(db: Session, updated_since: str | None = None) -> int:
     client = RDCrmClient(db)
-    params = {"updated_at": updated_since} if updated_since else None
+    params = {"filter": f"updated_at:>{updated_since}"} if updated_since else None
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):

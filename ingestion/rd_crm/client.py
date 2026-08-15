@@ -52,19 +52,21 @@ class RDCrmClient:
     def paginate(self, path: str, params: dict | None = None, page_size: int = 200) -> Iterator[dict]:
         """
         Percorre todas as páginas de um endpoint de listagem do RD CRM v2 e produz
-        (yield) um registro por vez. Endpoints v2 usam paginação por `page`/`limit`
-        com o array de itens dentro de `deals` / `organizations` / `contacts` etc,
-        conforme a entidade -- ajuste `items_key` se o payload vier diferente.
+        (yield) um registro por vez. A API v2 pagina com `page[number]`/`page[size]`
+        e devolve os itens dentro de `data` (estilo JSON:API). Mantemos um fallback
+        para o formato antigo (`items`) e para respostas que já sejam uma lista pura.
         """
         params = dict(params or {})
-        params["limit"] = page_size
-        page = 1
+        params["page[size]"] = page_size
+        page_number = 1
 
         while True:
-            params["page"] = page
+            params["page[number]"] = page_number
             data = self.get(path, params=params)
 
-            items = data.get("items") if isinstance(data, dict) else None
+            items = data.get("data") if isinstance(data, dict) else None
+            if items is None and isinstance(data, dict):
+                items = data.get("items")
             if items is None and isinstance(data, dict):
                 # fallback: primeira lista encontrada no payload
                 items = next((v for v in data.values() if isinstance(v, list)), [])
@@ -77,10 +79,7 @@ class RDCrmClient:
             for item in items:
                 yield item
 
-            has_more = data.get("has_more") if isinstance(data, dict) else None
-            if has_more is False:
-                break
-            if has_more is None and len(items) < page_size:
+            if len(items) < page_size:
                 break
 
-            page += 1
+            page_number += 1

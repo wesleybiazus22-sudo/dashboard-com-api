@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     rd_crm_client_id: str
     rd_crm_client_secret: str
     rd_crm_redirect_uri: str
-    rd_auth_dialog_url: str = "https://api.rd.services/auth/dialog"
-    rd_token_url: str = "https://api.rd.services/auth/token"
+    rd_auth_dialog_url: str = "https://accounts.rdstation.com/oauth/authorize"
+    rd_token_url: str = "https://api.rd.services/oauth2/token"
     rd_crm_api_base_url: str = "https://api.rd.services/crm/v2"
 
     # Webhook

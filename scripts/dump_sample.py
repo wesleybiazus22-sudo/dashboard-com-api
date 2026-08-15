@@ -22,8 +22,8 @@ ENDPOINTS = {
     "organizations": "/organizations",
     "contacts": "/contacts",
     "users": "/users",
-    "pipelines": "/deal_pipelines",
-    "lost_reasons": "/deal_lost_reasons",
+    "pipelines": "/pipelines",
+    "lost_reasons": "/lost_reasons",
     "tasks": "/tasks",
     "meetings": "/meetings",
 }

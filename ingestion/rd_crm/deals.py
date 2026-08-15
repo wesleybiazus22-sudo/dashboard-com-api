@@ -1,12 +1,14 @@
 """
 Sincronização de negociações (deals) do RD CRM.
 
-IMPORTANTE sobre os nomes de campo abaixo (deal_stage, deal_pipeline, organization,
-contacts, user, deal_source, deal_lost_reason...): eles seguem a nomenclatura mais comum
-da API v2 do RD CRM, mas você DEVE validar contra um payload real antes de rodar em
-produção. Rode `python -m scripts.dump_sample_deal` (ou inspecione a resposta de
-GET /deals?limit=1 diretamente) e ajuste `extract_deal_fields` conforme necessário --
-é o único lugar que precisa mudar.
+Formato dos campos conforme a documentação oficial (developers.rdstation.com/reference/
+crm-v2-list-deals): as propriedades filtráveis via RDQL -- organization_id, contact_id,
+stage_id, lost_reason_id, campaign_id, owner_id, pipeline_id -- são campos DIRETOS no
+objeto da negociação (não objetos aninhados como "deal_stage"/"organization", que era a
+suposição anterior e causava 401/dados vazios). O nome exato do campo de valor monetário
+(amount vs total_price) ainda não está 100% confirmado -- `extract_deal_fields` tenta as
+duas. Rode `python -m scripts.dump_sample deals` e confira contra este dict se algo não
+bater; é o único lugar que precisa mudar.
 """
 
 from datetime import datetime, timezone
@@ -21,32 +23,23 @@ ENDPOINT = "/deals"
 
 
 def extract_deal_fields(item: dict) -> dict:
-    stage = item.get("deal_stage") or {}
-    pipeline = item.get("deal_pipeline") or {}
-    organization = item.get("organization") or {}
-    contacts = item.get("contacts") or []
-    contact = contacts[0] if contacts else {}
-    owner = item.get("user") or item.get("owner") or {}
-    lost_reason = item.get("deal_lost_reason") or {}
-    source = item.get("deal_source") or {}
-
     return {
         "name": item.get("name"),
-        "amount": item.get("amount"),
+        "amount": item.get("amount") if item.get("amount") is not None else item.get("total_price"),
         "currency": item.get("currency") or "BRL",
-        "pipeline_rd_id": pipeline.get("id"),
-        "stage_rd_id": stage.get("id"),
-        "status": item.get("status") or item.get("deal_stage_state"),  # open / won / lost
-        "organization_rd_id": organization.get("id"),
-        "contact_rd_id": contact.get("id"),
-        "current_owner_rd_id": owner.get("id"),
-        "campaign": item.get("campaign"),
-        "source": source.get("name"),
-        "lost_reason_rd_id": lost_reason.get("id"),
+        "pipeline_rd_id": item.get("pipeline_id"),
+        "stage_rd_id": item.get("stage_id"),
+        "status": item.get("status") or item.get("deal_status"),  # open / won / lost
+        "organization_rd_id": item.get("organization_id"),
+        "contact_rd_id": item.get("contact_id") or (item.get("contact_ids") or [None])[0],
+        "current_owner_rd_id": item.get("owner_id"),
+        "campaign": item.get("campaign_id"),
+        "source": item.get("source") or item.get("deal_source"),
+        "lost_reason_rd_id": item.get("lost_reason_id"),
         "deal_created_at": parse_dt(item.get("created_at")),
         "deal_updated_at": parse_dt(item.get("updated_at")),
         "closed_at": parse_dt(item.get("closed_at") or item.get("won_at") or item.get("lost_at")),
-        "expected_close_date": parse_dt(item.get("prediction_date") or item.get("expected_close_at")),
+        "expected_close_date": parse_dt(item.get("expected_close_date")),
         "raw": item,
     }
 
@@ -106,5 +99,9 @@ def sync_deals_full(db: Session) -> int:
 
 
 def sync_deals_incremental(db: Session, updated_since_iso: str) -> int:
-    """Carga incremental: só negociações atualizadas desde a última sincronização."""
-    return _sync(db, params={"updated_at": updated_since_iso})
+    """Carga incremental: só negociações atualizadas desde a última sincronização.
+
+    A API usa RDQL no parâmetro `filter` (não um `updated_at` solto): o operador
+    "maior que" é `campo:>valor`.
+    """
+    return _sync(db, params={"filter": f"updated_at:>{updated_since_iso}"})
