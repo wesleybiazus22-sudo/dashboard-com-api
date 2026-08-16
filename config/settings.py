@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Webhook
     rd_webhook_token: str
 
+    # Token pra proteger os endpoints /sync/rd/* (chamados de fora, ex: GitHub Actions)
+    sync_trigger_token: str
+
     # App
     env: str = "development"
     log_level: str = "INFO"

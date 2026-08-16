@@ -16,6 +16,8 @@ services:
         sync: false
       - key: RD_WEBHOOK_TOKEN
         sync: false
+      - key: SYNC_TRIGGER_TOKEN
+        sync: false
       - key: RD_AUTH_DIALOG_URL
         value: https://accounts.rdstation.com/oauth/authorize
       - key: RD_TOKEN_URL

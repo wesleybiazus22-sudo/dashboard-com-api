@@ -1,0 +1,16 @@
+name: Sincronizacao incremental RD CRM
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar /sync/rd/incremental na API
+        run: |
+          curl -sf -X POST \
+            "https://dashboard-com-api.onrender.com/sync/rd/incremental?token=${{ secrets.SYNC_TRIGGER_TOKEN }}" \
+            --max-time 60 --retry 2 --retry-delay 5
