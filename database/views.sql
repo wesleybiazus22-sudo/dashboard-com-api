@@ -289,8 +289,6 @@ select
     d.amount,
     d.stage_rd_id,
     s_now.name as stage_name,
-    s_now.canonical_stage,
-    s_now."order" as stage_order,
     d.sdr_owner_rd_id,
     su.name as sdr_name,
     d.closer_owner_rd_id,
@@ -311,7 +309,9 @@ select
         join crm_stages s on s.rd_id = sh.stage_rd_id
         join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
         where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from freemium)
-    ) as closer_ganhou
+    ) as closer_ganhou,
+    s_now.canonical_stage,
+    s_now."order" as stage_order
 from crm_deals d
 join crm_pipelines p on p.rd_id = d.pipeline_rd_id
 left join crm_stages s_now on s_now.rd_id = d.stage_rd_id
