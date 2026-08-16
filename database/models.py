@@ -319,11 +319,20 @@ class MvCampaignCompany(Base):
     cnpj_mv: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     mv_status: Mapped[str | None] = mapped_column(String, nullable=True)  # status dentro do MV (Conectado/Sem Retorno)
 
+    # CONFIRMADO -- so preenchido por CNPJ (inequivoco) ou confirmacao manual. Isso e
+    # o que as views/relatorios devem usar.
     matched_organization_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     matched_deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    # 'auto_source' (origem Melhor Venda + janela de datas) | 'manual' (confirmado a
-    # mao) | 'unmatched' (nao encontrado no CRM ainda)
+    # 'auto_cnpj' | 'manual'
     match_confidence: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # SUGESTAO por similaridade de nome -- NUNCA promovido a matched_* sozinho (nomes
+    # de ISP/telecom compartilham demais palavras genericas pra confiar sem revisao).
+    # Precisa de confirm_suggestion() explicito.
+    suggested_deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    suggested_organization_rd_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    suggested_score: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
+
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

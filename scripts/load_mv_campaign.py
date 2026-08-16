@@ -15,6 +15,10 @@ Formato esperado do JSON:
     ...
   ]
 }
+
+So CNPJ confirma automaticamente. Similaridade de nome vira SUGESTAO -- aparece no
+relatorio marcada [SUGERIDO], precisa ser confirmada (ou rejeitada) manualmente antes
+de contar como match de verdade.
 """
 
 import json
@@ -31,7 +35,7 @@ def _print_report(campaign_id: str) -> None:
         rows = (
             db.query(MvCampaignCompany)
             .filter(MvCampaignCompany.campaign_id == campaign_id)
-            .order_by(MvCampaignCompany.match_confidence.is_(None), MvCampaignCompany.company_name_mv)
+            .order_by(MvCampaignCompany.company_name_mv)
             .all()
         )
 
@@ -47,6 +51,12 @@ def _print_report(campaign_id: str) -> None:
                 print(
                     f"  [{row.match_confidence:11}] {row.company_name_mv:45} -> "
                     f"{deal.name if deal else '?':35} | {stage_name} | status={deal.status if deal else '?'}"
+                )
+            elif row.suggested_deal_rd_id:
+                deal = db.query(CrmDeal).filter(CrmDeal.rd_id == row.suggested_deal_rd_id).one_or_none()
+                print(
+                    f"  [SUGERIDO   ] {row.company_name_mv:45} -> "
+                    f"{deal.name if deal else '?':35} | score={row.suggested_score} | id={row.id}"
                 )
             else:
                 flag = "AMBIGUO" if row.notes and "ambiguos" in row.notes else "SEM MATCH"
@@ -75,8 +85,9 @@ if __name__ == "__main__":
 
     results = auto_match_campaign(campaign_id)
     print(
-        f"Cruzamento: {results['matched_cnpj']} por CNPJ, {results['matched_name']} por nome, "
-        f"{results['ambiguous']} ambiguos, {results['unmatched']} sem match."
+        f"Cruzamento: {results['matched_cnpj']} confirmadas por CNPJ, "
+        f"{results['suggested']} sugeridas por nome (precisam de confirmacao), "
+        f"{results['ambiguous']} ambiguas, {results['unmatched']} sem match."
     )
 
     _print_report(campaign_id)

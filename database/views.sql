@@ -13,6 +13,9 @@ alter table mv_campaigns add column if not exists sdr_name varchar;
 alter table mv_campaigns add column if not exists label varchar;
 alter table mv_campaign_companies add column if not exists cnpj_mv varchar;
 create index if not exists ix_mv_campaign_companies_cnpj_mv on mv_campaign_companies (cnpj_mv);
+alter table mv_campaign_companies add column if not exists suggested_deal_rd_id varchar;
+alter table mv_campaign_companies add column if not exists suggested_organization_rd_id varchar;
+alter table mv_campaign_companies add column if not exists suggested_score numeric(4, 3);
 
 
 -- Uma linha por negociacao, com pipeline/etapa ja resolvidos e agrupados por produto.
@@ -203,7 +206,11 @@ create or replace view v_mv_campaign_status as
 select
     mc.week_start,
     mc.week_end,
+    mc.sdr_name,
+    mc.label as campaign_label,
+    mcc.id as company_id,
     mcc.company_name_mv,
+    mcc.cnpj_mv,
     mcc.mv_status,
     mcc.match_confidence,
     d.rd_id as deal_id,
@@ -211,10 +218,16 @@ select
     d.status as deal_status,
     s.name as stage_name,
     s.canonical_stage,
-    u.name as owner_name
+    u.name as owner_name,
+    -- so preenchidos quando ha uma sugestao por nome pendente de revisao (nao
+    -- confirmada) -- deal_id/deal_name acima ficam vazios nesse caso.
+    mcc.suggested_deal_rd_id,
+    sd.name as suggested_deal_name,
+    mcc.suggested_score
 from mv_campaign_companies mcc
 join mv_campaigns mc on mc.id = mcc.campaign_id
 left join crm_deals d on d.rd_id = mcc.matched_deal_rd_id
 left join crm_stages s on s.rd_id = d.stage_rd_id
 left join crm_users u on u.rd_id = d.current_owner_rd_id
+left join crm_deals sd on sd.rd_id = mcc.suggested_deal_rd_id
 order by mc.week_start desc, mcc.company_name_mv;

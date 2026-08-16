@@ -5,12 +5,15 @@ O MV nao tem API/webhook integrado aqui -- os dados chegam via print que o usuar
 manda toda semana. Este modulo:
 1. registra a campanha e a lista de empresas (nome + CNPJ + status no MV)
 2. tenta casar cada empresa com uma negociacao do CRM que veio com origem "Melhor
-   Venda" (source_id) e foi criada dentro da janela da campanha -- primeiro por CNPJ
-   (se o CNPJ aparecer em qualquer lugar dos dados da empresa/negociacao no CRM, e
-   correspondencia praticamente certa, mesmo sem saber o nome exato do campo onde o
-   RD guarda isso), com similaridade de nome como fallback quando nao ha CNPJ
-3. deixa como pendente (sem match automatico) qualquer caso ambiguo ou sem
-   correspondencia, para revisao manual -- nunca "chuta" um match duvidoso
+   Venda" (source_id) e foi criada dentro da janela da campanha
+3. so CONFIRMA automaticamente (matched_*) por CNPJ -- se o CNPJ aparecer em
+   qualquer lugar dos dados da negociacao/empresa no CRM, e correspondencia
+   praticamente certa. Similaridade de nome NUNCA confirma sozinha: nesse nicho
+   (ISP/telecom) quase todo nome compartilha palavras genericas ("telecom",
+   "internet", "net", "fibra", "provedor"...), o que gera falsos positivos faceis
+   (ja aconteceu: "OPTTO TELECOMUNICACOES" e "W R TELECOMUNICACAO" bateram os dois
+   com "KFM TELECOMUNICACOES" so por causa do sufixo comum). Nome vira SUGESTAO
+   (suggested_*), que precisa de confirm_suggestion() explicito.
 
 Uso tipico (chamado a partir de um script/chat, nao tem CLI proprio ainda):
 
@@ -32,21 +35,39 @@ from database.models import CrmDeal, CrmOrganization, MvCampaign, MvCampaignComp
 # Confirmado no RD Station (campo "Fonte" = "Melhor Venda" na negociacao).
 MV_SOURCE_ID = "6a39411c5945e80029aa36ea"
 
-_SUFFIXES = re.compile(r"\b(ltda|me|epp|s ?/ ?a|sa|eireli|mei)\b\.?", re.IGNORECASE)
+# Termos genericos do nicho ISP/telecom -- removidos ANTES de calcular similaridade,
+# senao dois nomes de empresas totalmente diferentes (ex: "Optto Telecomunicacoes"
+# vs "KFM Telecomunicacoes") ficam parecidos so pelo sufixo comum do setor.
+_GENERIC_TERMS = re.compile(
+    r"\b("
+    r"ltda|me|epp|s ?/ ?a|sa|eireli|mei|"
+    r"telecom(unicacoes?|unicacao)?|internet|provedor(a|es)?|fibra|conexao|conexoes|"
+    r"comunicacoes?|net|sistema|system|digital|tecnologia|servicos?|comercio|"
+    r"solucoes|valor|adicionado|central"
+    r")\b\.?",
+    re.IGNORECASE,
+)
 _NON_ALNUM = re.compile(r"[^a-z0-9 ]")
 _MULTI_SPACE = re.compile(r"\s+")
 _NON_DIGIT = re.compile(r"\D")
 
+MIN_DISTINCTIVE_LEN = 3  # abaixo disso, o nome ficou generico demais pra comparar
+
 
 def _normalize(name: str) -> str:
     name = name.lower()
-    name = _SUFFIXES.sub("", name)
+    name = _GENERIC_TERMS.sub("", name)
     name = _NON_ALNUM.sub(" ", name)
     return _MULTI_SPACE.sub(" ", name).strip()
 
 
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
+def _similarity(a: str, b: str) -> float | None:
+    """None quando algum dos dois nomes, apos remover termos genericos, ficou curto
+    demais pra uma comparacao confiavel (evita falso positivo por sufixo comum)."""
+    na, nb = _normalize(a), _normalize(b)
+    if len(na) < MIN_DISTINCTIVE_LEN or len(nb) < MIN_DISTINCTIVE_LEN:
+        return None
+    return SequenceMatcher(None, na, nb).ratio()
 
 
 def _digits(value: str | None) -> str:
@@ -90,18 +111,14 @@ def auto_match_campaign(
     campaign_id: str,
     mv_source_id: str = MV_SOURCE_ID,
     days_buffer: int = 3,
-    min_similarity: float = 0.6,
-    ambiguous_margin: float = 0.1,
+    min_similarity: float = 0.82,
 ) -> dict:
-    """Casa empresas da campanha com negociacoes do CRM.
-
-    Prioridade: (1) CNPJ encontrado em qualquer lugar do raw da negociacao/empresa no
-    CRM -> match_confidence='auto_cnpj', decisivo, ignora ambiguidade de nome.
-    (2) similaridade de nome -> match_confidence='auto_name', so quando ha um
-    candidato claramente melhor que os demais.
-    Caso contrario fica pendente (match_confidence None) para revisao manual.
-    """
-    results = {"matched_cnpj": 0, "matched_name": 0, "ambiguous": 0, "unmatched": 0}
+    """CNPJ com 1 candidato -> confirma (matched_*, match_confidence='auto_cnpj').
+    CNPJ com 2+ candidatos -> ambiguo, fica pendente.
+    Sem CNPJ -> melhor candidato por nome (se acima de min_similarity e sem empate
+    proximo) vira SUGESTAO (suggested_*), nunca confirma sozinho.
+    Sem nenhum candidato -> sem match."""
+    results = {"matched_cnpj": 0, "suggested": 0, "ambiguous": 0, "unmatched": 0}
 
     with session_scope() as db:
         campaign = db.get(MvCampaign, campaign_id)
@@ -124,9 +141,6 @@ def auto_match_campaign(
             for o in db.query(CrmOrganization).filter(CrmOrganization.rd_id.in_(org_ids)).all()
         } if org_ids else {}
 
-        # Pre-computa a "sopa de digitos" de cada negociacao candidata (raw do deal +
-        # raw da empresa vinculada), pra buscar o CNPJ sem depender de saber o nome
-        # exato do campo onde o RD guarda isso.
         deal_digit_blobs: dict[str, str] = {}
         for deal in candidates:
             org = orgs.get(deal.organization_rd_id)
@@ -164,14 +178,16 @@ def auto_match_campaign(
                 company.notes = f"{company.notes}\n{note}" if company.notes else note
                 continue
 
-            # Sem match por CNPJ -- cai pro fallback de similaridade de nome.
+            # Sem CNPJ (ou nao encontrado) -- similaridade de nome vira sugestao, nao match.
             scored: list[tuple[float, CrmDeal]] = []
             for deal in candidates:
                 org = orgs.get(deal.organization_rd_id)
                 names = [deal.name, org.name if org else None]
-                best = max((_similarity(company.company_name_mv, n) for n in names if n), default=0.0)
-                if best >= min_similarity:
-                    scored.append((best, deal))
+                scores = [s for n in names if n for s in [_similarity(company.company_name_mv, n)] if s is not None]
+                if scores:
+                    best = max(scores)
+                    if best >= min_similarity:
+                        scored.append((best, deal))
 
             scored.sort(key=lambda pair: pair[0], reverse=True)
 
@@ -179,16 +195,28 @@ def auto_match_campaign(
                 results["unmatched"] += 1
                 continue
 
-            if len(scored) > 1 and (scored[0][0] - scored[1][0]) < ambiguous_margin:
-                results["ambiguous"] += 1
-                note = f"[auto] {len(scored)} candidatos ambiguos por nome (scores proximos) -- revisar manualmente"
-                company.notes = f"{company.notes}\n{note}" if company.notes else note
-                continue
-
-            _, best_deal = scored[0]
-            company.matched_deal_rd_id = best_deal.rd_id
-            company.matched_organization_rd_id = best_deal.organization_rd_id
-            company.match_confidence = "auto_name"
-            results["matched_name"] += 1
+            best_score, best_deal = scored[0]
+            company.suggested_deal_rd_id = best_deal.rd_id
+            company.suggested_organization_rd_id = best_deal.organization_rd_id
+            company.suggested_score = round(best_score, 3)
+            results["suggested"] += 1
 
     return results
+
+
+def confirm_suggestion(company_id: str) -> None:
+    """Promove a sugestao (suggested_*) a match confirmado, apos revisao humana."""
+    with session_scope() as db:
+        company = db.get(MvCampaignCompany, company_id)
+        company.matched_deal_rd_id = company.suggested_deal_rd_id
+        company.matched_organization_rd_id = company.suggested_organization_rd_id
+        company.match_confidence = "manual"
+
+
+def reject_suggestion(company_id: str) -> None:
+    """Descarta a sugestao (nome parecido mas nao e a mesma empresa)."""
+    with session_scope() as db:
+        company = db.get(MvCampaignCompany, company_id)
+        company.suggested_deal_rd_id = None
+        company.suggested_organization_rd_id = None
+        company.suggested_score = None
