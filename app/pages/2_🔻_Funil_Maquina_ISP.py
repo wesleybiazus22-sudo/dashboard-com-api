@@ -114,13 +114,35 @@ st.divider()
 
 # ---------------------------------------------------------------- Aging / velocity
 st.subheader("Tempo por etapa (velocity)")
-if sdr_selecionado != "Todos" or closer_selecionado != "Todos":
-    st.caption("⚠️ Este gráfico ainda é sempre da base inteira (não respeita o filtro de SDR/Closer acima).")
 
-velocity = query(
-    "select canonical_stage, stage_name, stage_order, media_horas, mediana_horas, parados_agora, "
-    "media_horas_parados_agora from v_stage_velocity where product_group = 'Máquina ISP' order by stage_order"
+aging = query(
+    "select deal_id, stage_name, stage_order, exited_at, duration_hours "
+    "from v_deal_stage_aging where product_group = 'Máquina ISP'"
 )
+# so as passagens de negociacoes que sobreviveram ao filtro de SDR/Closer do topo
+aging = aging[aging["deal_id"].isin(filtrado["deal_id"])]
+
+concluidas = aging[aging["exited_at"].notna()]
+abertas_hist = aging[aging["exited_at"].isna()]
+
+media_df = (
+    concluidas.groupby("stage_name")["duration_hours"]
+    .agg(media_horas="mean", mediana_horas="median")
+    .reset_index()
+)
+parados_df = (
+    abertas_hist.groupby("stage_name")["duration_hours"]
+    .agg(parados_agora="count", media_horas_parados_agora="mean")
+    .reset_index()
+)
+
+velocity = (
+    aging[["stage_name", "stage_order"]]
+    .drop_duplicates()
+    .merge(media_df, on="stage_name", how="left")
+    .merge(parados_df, on="stage_name", how="left")
+)
+velocity["parados_agora"] = velocity["parados_agora"].fillna(0).astype(int)
 # ordem de exibicao: primeira etapa no topo do grafico horizontal
 velocity = velocity.sort_values("stage_order", ascending=False)
 
