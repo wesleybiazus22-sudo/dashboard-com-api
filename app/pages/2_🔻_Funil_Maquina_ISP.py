@@ -18,8 +18,16 @@ from app.theme import (
 )
 
 st.set_page_config(page_title="Funil Máquina ISP", page_icon="🔻", layout="wide")
-st.title("🔻 Funil Máquina ISP")
-st.caption("Qualificação + Closer tratados como um único funil ponta a ponta.")
+
+title_col, refresh_col = st.columns([6, 1])
+with title_col:
+    st.title("🔻 Funil Máquina ISP")
+    st.caption("Qualificação + Closer tratados como um único funil ponta a ponta.")
+with refresh_col:
+    st.write("")
+    if st.button("🔄 Atualizar dados", help="Os dados ficam em cache por 5 min -- clique pra forçar releitura do banco"):
+        st.cache_data.clear()
+        st.rerun()
 
 funnel_df = query(
     "select canonical_stage, deals, pipeline_value from v_funnel_summary where product_group = 'Máquina ISP'"

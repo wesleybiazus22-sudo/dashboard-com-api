@@ -10,8 +10,16 @@ from app.db import query
 from app.theme import MV_STATUS_COLORS, STATUS_GOOD, base_layout
 
 st.set_page_config(page_title="Melhor Venda", page_icon="🎯", layout="wide")
-st.title("🎯 Melhor Venda — Outbound")
-st.caption("Leads prospectados semanalmente, cruzados com o RD Station CRM.")
+
+title_col, refresh_col = st.columns([6, 1])
+with title_col:
+    st.title("🎯 Melhor Venda — Outbound")
+    st.caption("Leads prospectados semanalmente, cruzados com o RD Station CRM.")
+with refresh_col:
+    st.write("")
+    if st.button("🔄 Atualizar dados", help="Os dados ficam em cache por 5 min -- clique pra forçar releitura do banco"):
+        st.cache_data.clear()
+        st.rerun()
 
 campaigns = query("select * from v_mv_channel_summary order by week_start")
 status_detail = query(
