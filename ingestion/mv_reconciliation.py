@@ -110,20 +110,28 @@ def add_companies(campaign_id: str, companies: list[tuple[str, str | None, str |
 def auto_match_campaign(
     campaign_id: str,
     mv_source_id: str = MV_SOURCE_ID,
-    days_buffer: int = 3,
+    days_before: int = 1,
+    days_after: int = 14,
     min_similarity: float = 0.82,
 ) -> dict:
     """CNPJ com 1 candidato -> confirma (matched_*, match_confidence='auto_cnpj').
     CNPJ com 2+ candidatos -> ambiguo, fica pendente.
     Sem CNPJ -> melhor candidato por nome (se acima de min_similarity e sem empate
     proximo) vira SUGESTAO (suggested_*), nunca confirma sozinho.
-    Sem nenhum candidato -> sem match."""
+    Sem nenhum candidato -> sem match.
+
+    A janela de datas e assimetrica: pouca folga antes do inicio da semana (deals
+    quase nunca sao criados antes da campanha comecar), bastante folga depois --
+    observado na pratica que o Melhor Venda continua tentando contato por 1-2
+    semanas apos a campanha "gerada", entao o deal so aparece no CRM bem depois do
+    fim nominal da semana.
+    """
     results = {"matched_cnpj": 0, "suggested": 0, "ambiguous": 0, "unmatched": 0}
 
     with session_scope() as db:
         campaign = db.get(MvCampaign, campaign_id)
-        window_start = campaign.week_start - timedelta(days=days_buffer)
-        window_end = campaign.week_end + timedelta(days=days_buffer)
+        window_start = campaign.week_start - timedelta(days=days_before)
+        window_end = campaign.week_end + timedelta(days=days_after)
 
         candidates = (
             db.query(CrmDeal)
