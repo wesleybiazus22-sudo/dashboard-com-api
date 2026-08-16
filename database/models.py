@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -282,6 +283,51 @@ class CrmMeeting(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+# ======================================================================
+# MELHOR VENDA (outbound) -- reconciliacao manual/semi-automatica com o CRM
+# ======================================================================
+
+
+class MvCampaign(Base):
+    """Uma campanha semanal do Melhor Venda (ex: lista de ~50 empresas prospectadas
+    naquela semana). Nao vem de API nenhuma -- criada a partir do print que o
+    usuario manda toda semana."""
+
+    __tablename__ = "mv_campaigns"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    week_start: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    week_end: Mapped[datetime] = mapped_column(Date, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    companies: Mapped[list["MvCampaignCompany"]] = relationship(back_populates="campaign")
+
+
+class MvCampaignCompany(Base):
+    """Uma empresa dentro de uma campanha do Melhor Venda, com o resultado do
+    cruzamento contra o CRM (quando encontrado)."""
+
+    __tablename__ = "mv_campaign_companies"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(String, ForeignKey("mv_campaigns.id"), nullable=False, index=True)
+
+    company_name_mv: Mapped[str] = mapped_column(String, nullable=False)  # nome como aparece no MV
+    mv_status: Mapped[str | None] = mapped_column(String, nullable=True)  # status dentro do MV
+
+    matched_organization_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    matched_deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # 'auto_source' (origem Melhor Venda + janela de datas) | 'manual' (confirmado a
+    # mao) | 'unmatched' (nao encontrado no CRM ainda)
+    match_confidence: Mapped[str | None] = mapped_column(String, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    campaign: Mapped["MvCampaign"] = relationship(back_populates="companies")
+
+
 __all__ = [
     "OAuthToken",
     "SyncState",
@@ -298,4 +344,6 @@ __all__ = [
     "CrmDealEvent",
     "CrmTask",
     "CrmMeeting",
+    "MvCampaign",
+    "MvCampaignCompany",
 ]

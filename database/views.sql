@@ -186,3 +186,28 @@ select product_group, mes, evento, count(*) as negociacoes, coalesce(sum(amount)
 from v_pipeline_movement
 group by product_group, mes, evento
 order by product_group, mes, evento;
+
+
+-- Status de cada empresa de cada campanha do Melhor Venda, ja cruzada com a etapa
+-- atual no CRM quando ha match. company_name_mv/mv_status sempre aparecem mesmo sem
+-- match, pra dar visao completa do funil MV -> CRM (quantas conectaram, quantas
+-- viraram negociacao, em que etapa estao agora).
+create or replace view v_mv_campaign_status as
+select
+    mc.week_start,
+    mc.week_end,
+    mcc.company_name_mv,
+    mcc.mv_status,
+    mcc.match_confidence,
+    d.rd_id as deal_id,
+    d.name as deal_name,
+    d.status as deal_status,
+    s.name as stage_name,
+    s.canonical_stage,
+    u.name as owner_name
+from mv_campaign_companies mcc
+join mv_campaigns mc on mc.id = mcc.campaign_id
+left join crm_deals d on d.rd_id = mcc.matched_deal_rd_id
+left join crm_stages s on s.rd_id = d.stage_rd_id
+left join crm_users u on u.rd_id = d.current_owner_rd_id
+order by mc.week_start desc, mcc.company_name_mv;
