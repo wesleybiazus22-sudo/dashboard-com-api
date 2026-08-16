@@ -14,6 +14,7 @@ from app.theme import (
     CAT_ORANGE,
     SEQUENTIAL_BLUE,
     base_layout,
+    format_duration,
 )
 
 st.set_page_config(page_title="Funil Máquina ISP", page_icon="🔻", layout="wide")
@@ -120,38 +121,54 @@ velocity = query(
     "select canonical_stage, stage_name, stage_order, media_horas, mediana_horas, parados_agora, "
     "media_horas_parados_agora from v_stage_velocity where product_group = 'Máquina ISP' order by stage_order"
 )
+# ordem de exibicao: primeira etapa no topo do grafico horizontal
+velocity = velocity.sort_values("stage_order", ascending=False)
+
+media_fmt = velocity["media_horas"].apply(format_duration)
+parado_fmt = velocity["media_horas_parados_agora"].apply(format_duration)
 
 fig_vel = go.Figure()
 fig_vel.add_trace(
     go.Bar(
-        name="Média histórica (dias)",
-        x=velocity["stage_name"],
-        y=(velocity["media_horas"] / 24).round(1),
+        name="Média histórica",
+        y=velocity["stage_name"],
+        x=velocity["media_horas"],
+        orientation="h",
         marker_color=CAT_BLUE,
+        text=media_fmt,
+        textposition="outside",
+        customdata=media_fmt,
+        hovertemplate="<b>%{y}</b><br>Média histórica: %{customdata}<extra></extra>",
     )
 )
 fig_vel.add_trace(
     go.Bar(
-        name="Parado agora, em média (dias)",
-        x=velocity["stage_name"],
-        y=(velocity["media_horas_parados_agora"] / 24).round(1),
+        name="Parado agora, em média",
+        y=velocity["stage_name"],
+        x=velocity["media_horas_parados_agora"],
+        orientation="h",
         marker_color=CAT_ORANGE,
+        text=parado_fmt,
+        textposition="outside",
+        customdata=parado_fmt,
+        hovertemplate="<b>%{y}</b><br>Parado agora, em média: %{customdata}<extra></extra>",
     )
 )
 fig_vel.update_layout(barmode="group")
-fig_vel.update_yaxes(title="dias")
-base_layout(fig_vel, height=380)
+fig_vel.update_xaxes(title="horas (rótulo mostra formatado em dias/horas/min)")
+base_layout(fig_vel, height=440)
 st.plotly_chart(fig_vel, use_container_width=True)
 
-velocity_display = velocity.rename(
-    columns={
-        "stage_name": "Etapa",
-        "media_horas": "Média histórica (h)",
-        "mediana_horas": "Mediana histórica (h)",
-        "parados_agora": "Parados agora",
-        "media_horas_parados_agora": "Média parado agora (h)",
+velocity_display = velocity.assign(
+    **{
+        "Média histórica": media_fmt,
+        "Mediana histórica": velocity["mediana_horas"].apply(format_duration),
+        "Parados agora": velocity["parados_agora"],
+        "Média parado agora": parado_fmt,
     }
-).drop(columns=["canonical_stage", "stage_order"])
+)[["stage_name", "Média histórica", "Mediana histórica", "Parados agora", "Média parado agora"]].rename(
+    columns={"stage_name": "Etapa"}
+)
 st.dataframe(velocity_display, use_container_width=True, hide_index=True)
 
 st.divider()

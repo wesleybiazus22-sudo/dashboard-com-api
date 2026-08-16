@@ -49,6 +49,32 @@ CANONICAL_STAGE_LABELS = {
 }
 
 
+def format_duration(hours: float | None) -> str:
+    """Formata uma duracao em horas (float) pra texto legivel, escolhendo a unidade
+    pela magnitude: minutos abaixo de 1h, horas+minutos abaixo de 1 dia, dias+horas
+    acima disso. Evita mostrar "0.0 dias" pra etapas que na pratica duram minutos."""
+    if hours is None or hours != hours:  # NaN
+        return "—"
+    if hours < 0:
+        hours = 0
+
+    total_minutes = round(hours * 60)
+    if total_minutes < 60:
+        return f"{total_minutes} min"
+
+    if hours < 24:
+        h = int(hours)
+        m = round((hours - h) * 60)
+        return f"{h}h {m}min" if m else f"{h}h"
+
+    days = int(hours // 24)
+    rem_h = round(hours % 24)
+    if rem_h == 24:  # arredondamento pode empurrar pro proximo dia
+        days += 1
+        rem_h = 0
+    return f"{days}d {rem_h}h" if rem_h else f"{days}d"
+
+
 def base_layout(fig, height: int = 420):
     """Aplica chrome consistente (grid recessivo, fundo, fonte) a uma figura Plotly."""
     fig.update_layout(
