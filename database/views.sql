@@ -82,3 +82,107 @@ create or replace view v_current_deal_aging as
 select *
 from v_deal_stage_aging
 where exited_at is null;
+
+
+-- Velocity: quanto tempo, em media/mediana, as negociacoes ficam em cada etapa --
+-- separa passagens ja concluidas (exited_at preenchido) de negociacoes paradas
+-- AGORA na etapa (uteis pra achar gargalos correntes vs. tempo historico normal).
+create or replace view v_stage_velocity as
+select
+    product_group,
+    canonical_stage,
+    stage_name,
+    stage_order,
+    count(*) filter (where exited_at is not null) as passagens_concluidas,
+    round(avg(duration_hours) filter (where exited_at is not null)::numeric, 1) as media_horas,
+    round(
+        percentile_cont(0.5) within group (order by duration_hours)
+        filter (where exited_at is not null)::numeric, 1
+    ) as mediana_horas,
+    count(*) filter (where exited_at is null) as parados_agora,
+    round(avg(duration_hours) filter (where exited_at is null)::numeric, 1) as media_horas_parados_agora
+from v_deal_stage_aging
+where product_group is not null
+group by product_group, canonical_stage, stage_name, stage_order
+order by product_group, stage_order;
+
+
+-- Performance de SDR: originacao (quem trouxe a negociacao), independente de quem
+-- fechou depois. sdr_owner_rd_id/handoff_at sao calculados pelo webhook processor a
+-- partir do primeiro dono da negociacao.
+create or replace view v_sdr_performance as
+select
+    u.name as sdr_name,
+    d.sdr_owner_rd_id,
+    p.product_group,
+    count(*) as leads_originados,
+    count(*) filter (
+        where s.canonical_stage in ('SQL', 'OPPORTUNITY', 'DISCOVERY', 'PROPOSAL', 'NEGOTIATION')
+           or d.handoff_at is not null
+    ) as sqls_gerados,
+    count(*) filter (where d.handoff_at is not null) as oportunidades_repassadas,
+    count(*) filter (where d.status = 'won') as vendas_originadas,
+    coalesce(sum(d.amount) filter (where d.status = 'won'), 0) as receita_originada
+from crm_deals d
+join crm_pipelines p on p.rd_id = d.pipeline_rd_id
+left join crm_stages s on s.rd_id = d.stage_rd_id
+left join crm_users u on u.rd_id = d.sdr_owner_rd_id
+where p.product_group is not null
+  and d.sdr_owner_rd_id is not null
+group by u.name, d.sdr_owner_rd_id, p.product_group
+order by p.product_group, leads_originados desc;
+
+
+-- Performance de Closer: negociacoes recebidas via handoff (ou owner atual, se nao
+-- houve handoff detectado), taxa de vitoria, ticket medio e ciclo apos o handoff.
+create or replace view v_closer_performance as
+select
+    u.name as closer_name,
+    coalesce(d.closer_owner_rd_id, d.current_owner_rd_id) as closer_rd_id,
+    p.product_group,
+    count(*) as oportunidades,
+    count(*) filter (where d.status = 'ongoing') as em_andamento,
+    count(*) filter (where d.status = 'won') as ganhas,
+    count(*) filter (where d.status = 'lost') as perdidas,
+    round(
+        100.0 * count(*) filter (where d.status = 'won')
+        / nullif(count(*) filter (where d.status in ('won', 'lost')), 0), 1
+    ) as win_rate_pct,
+    coalesce(sum(d.amount) filter (where d.status = 'won'), 0) as receita_fechada,
+    round(avg(d.amount) filter (where d.status = 'won')::numeric, 2) as ticket_medio,
+    round(
+        avg(extract(epoch from (d.closed_at - d.handoff_at)) / 86400)
+        filter (where d.status = 'won' and d.handoff_at is not null)::numeric, 1
+    ) as ciclo_medio_dias_pos_handoff
+from crm_deals d
+join crm_pipelines p on p.rd_id = d.pipeline_rd_id
+left join crm_users u on u.rd_id = coalesce(d.closer_owner_rd_id, d.current_owner_rd_id)
+where p.product_group is not null
+  and coalesce(d.closer_owner_rd_id, d.current_owner_rd_id) is not null
+group by u.name, coalesce(d.closer_owner_rd_id, d.current_owner_rd_id), p.product_group
+order by p.product_group, receita_fechada desc;
+
+
+-- Pipeline movement: eventos de entrada/ganho/perda por mes -- base do grafico em
+-- cascata (pipeline inicio + novo + ganho - perdido = pipeline fim). Aproximado: usa
+-- o valor ATUAL da negociacao, nao um snapshot historico do valor no momento do evento
+-- (ainda nao temos snapshot de valor ao longo do tempo).
+create or replace view v_pipeline_movement as
+select product_group, 'novo' as evento, date_trunc('month', deal_created_at) as mes, deal_id, amount
+from v_deal_funnel
+where deal_created_at is not null
+union all
+select product_group, 'ganho' as evento, date_trunc('month', closed_at) as mes, deal_id, amount
+from v_deal_funnel
+where status = 'won' and closed_at is not null
+union all
+select product_group, 'perdido' as evento, date_trunc('month', closed_at) as mes, deal_id, amount
+from v_deal_funnel
+where status = 'lost' and closed_at is not null;
+
+
+create or replace view v_pipeline_movement_summary as
+select product_group, mes, evento, count(*) as negociacoes, coalesce(sum(amount), 0) as valor
+from v_pipeline_movement
+group by product_group, mes, evento
+order by product_group, mes, evento;
