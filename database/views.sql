@@ -236,3 +236,83 @@ left join crm_stages s on s.rd_id = d.stage_rd_id
 left join crm_users u on u.rd_id = d.current_owner_rd_id
 left join crm_deals sd on sd.rd_id = mcc.suggested_deal_rd_id
 order by mc.week_start desc, mcc.company_name_mv;
+
+
+-- Metricas de canal por campanha do Melhor Venda -- base da pagina "Melhor Venda"
+-- do dashboard (volume, taxa de conexao, quanto virou negociacao no CRM).
+create or replace view v_mv_channel_summary as
+select
+    mc.id as campaign_id,
+    mc.label as campaign_label,
+    mc.sdr_name,
+    mc.week_start,
+    mc.week_end,
+    count(*) as leads_total,
+    count(*) filter (where mcc.mv_status = 'Conectado') as leads_conectados,
+    round(
+        100.0 * count(*) filter (where mcc.mv_status = 'Conectado') / nullif(count(*), 0), 1
+    ) as pct_conexao,
+    count(*) filter (where mcc.matched_deal_rd_id is not null) as leads_no_crm,
+    count(*) filter (
+        where mcc.matched_deal_rd_id is not null and mcc.mv_status = 'Conectado'
+    ) as conectados_no_crm
+from mv_campaigns mc
+join mv_campaign_companies mcc on mcc.campaign_id = mc.id
+group by mc.id, mc.label, mc.sdr_name, mc.week_start, mc.week_end
+order by mc.week_start;
+
+
+-- Marcos de negocio do funil Maquina ISP, conforme definido pelo usuario:
+-- "ganho SDR" = a negociacao chegou em "Reuniao Realizada" (ou etapa posterior) no
+-- pipeline Closer -- e o criterio de entrega da SDR, independente do resultado final.
+-- "ganho Closer" = a negociacao chegou em "Freemium" -- e o fechamento de verdade
+-- pra esse produto, diferente do status generico won/lost do RD (uma negociacao pode
+-- estar "ongoing" e ja ter alcancado Freemium, ou "lost" depois de ter chegado la).
+-- Usa a ORDEM da etapa dentro do pipeline Closer (nao so o nome exato), pra nao
+-- perder casos onde a negociacao pulou uma etapa no caminho.
+create or replace view v_maquina_isp_deal_milestones as
+with closer_pipeline as (
+    select rd_id from crm_pipelines where name = '[Máquina ISP] Closer'
+),
+reuniao_realizada as (
+    select s."order" as ord from crm_stages s, closer_pipeline cp
+    where s.pipeline_rd_id = cp.rd_id and s.name = 'Reunião Realizada'
+),
+freemium as (
+    select s."order" as ord from crm_stages s, closer_pipeline cp
+    where s.pipeline_rd_id = cp.rd_id and s.name = 'Freemium'
+)
+select
+    d.rd_id as deal_id,
+    d.name as deal_name,
+    d.status as deal_status,
+    d.amount,
+    d.stage_rd_id,
+    s_now.name as stage_name,
+    d.sdr_owner_rd_id,
+    su.name as sdr_name,
+    d.closer_owner_rd_id,
+    cu.name as closer_name,
+    d.handoff_at,
+    d.deal_created_at,
+    d.closed_at,
+    exists (
+        select 1
+        from crm_deal_stage_history sh
+        join crm_stages s on s.rd_id = sh.stage_rd_id
+        join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+        where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from reuniao_realizada)
+    ) as sdr_ganhou,
+    exists (
+        select 1
+        from crm_deal_stage_history sh
+        join crm_stages s on s.rd_id = sh.stage_rd_id
+        join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+        where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from freemium)
+    ) as closer_ganhou
+from crm_deals d
+join crm_pipelines p on p.rd_id = d.pipeline_rd_id
+left join crm_stages s_now on s_now.rd_id = d.stage_rd_id
+left join crm_users su on su.rd_id = d.sdr_owner_rd_id
+left join crm_users cu on cu.rd_id = d.closer_owner_rd_id
+where p.product_group = 'Máquina ISP';
