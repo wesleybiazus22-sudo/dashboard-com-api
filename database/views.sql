@@ -48,7 +48,7 @@ select
     count(*) as deals,
     sum(amount) as pipeline_value
 from v_deal_funnel
-where status = 'open'
+where status = 'ongoing'
 group by product_group, canonical_stage;
 
 
