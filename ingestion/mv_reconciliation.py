@@ -63,10 +63,22 @@ def _normalize(name: str) -> str:
 
 def _similarity(a: str, b: str) -> float | None:
     """None quando algum dos dois nomes, apos remover termos genericos, ficou curto
-    demais pra uma comparacao confiavel (evita falso positivo por sufixo comum)."""
+    demais pra uma comparacao confiavel (evita falso positivo por sufixo comum).
+
+    Negociacoes criadas rapido pelo SDR as vezes tem nome curto/apelido (ex: "FLIX"
+    em vez de "FLIX SP TELECOM LTDA") -- se todas as palavras distintivas do nome
+    mais curto aparecem no nome mais longo, tratamos como forte indicio (0.95),
+    mesmo que o ratio bruto fique baixo por causa da diferenca de tamanho.
+    """
     na, nb = _normalize(a), _normalize(b)
     if len(na) < MIN_DISTINCTIVE_LEN or len(nb) < MIN_DISTINCTIVE_LEN:
         return None
+
+    tokens_a, tokens_b = set(na.split()), set(nb.split())
+    shorter, longer = (tokens_a, tokens_b) if len(tokens_a) <= len(tokens_b) else (tokens_b, tokens_a)
+    if shorter and shorter.issubset(longer):
+        return 0.95
+
     return SequenceMatcher(None, na, nb).ratio()
 
 
