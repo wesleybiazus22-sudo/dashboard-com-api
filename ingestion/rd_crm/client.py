@@ -49,6 +49,23 @@ class RDCrmClient:
         response.raise_for_status()
         return response.json()
 
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=1, max=30),
+        reraise=True,
+    )
+    def post(self, path: str, json: dict) -> dict:
+        url = f"{self.base_url}{path}"
+        response = httpx.post(url, headers=self._headers(), json=json, timeout=30)
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 5))
+            time.sleep(retry_after)
+
+        response.raise_for_status()
+        return response.json()
+
     def paginate(self, path: str, params: dict | None = None, page_size: int = 200) -> Iterator[dict]:
         """
         Percorre todas as páginas de um endpoint de listagem do RD CRM v2 e produz

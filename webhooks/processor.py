@@ -74,7 +74,7 @@ def _record_event(db: Session, deal: CrmDeal, field: str, old_value, new_value, 
     )
 
 
-def _apply_sdr_closer_split(db: Session, deal: CrmDeal, deal_rd_id: str) -> None:
+def apply_sdr_closer_split(db: Session, deal: CrmDeal, deal_rd_id: str) -> None:
     """O primeiro dono do historico = SDR que originou. O primeiro dono DIFERENTE
     que aparece depois = closer que recebeu o handoff."""
     owner_rows = (
@@ -164,5 +164,5 @@ def process_deal_webhook(db: Session, event_type: str, payload: dict) -> None:
         )
 
     db.flush()
-    _apply_sdr_closer_split(db, deal, rd_id)
+    apply_sdr_closer_split(db, deal, rd_id)
     db.commit()
