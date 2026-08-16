@@ -16,7 +16,7 @@ Uso tipico (chamado a partir de um script/chat, nao tem CLI proprio ainda):
 
     campaign_id = create_campaign(date(2026, 8, 11), date(2026, 8, 15))
     add_companies(campaign_id, [("Empresa X Telecom", "Conectado"), ...])
-    auto_match_campaign(campaign_id, mv_source_id="6a39411c5945e80029aa36ea")
+    auto_match_campaign(campaign_id)  # usa MV_SOURCE_ID por padrao
 """
 
 import re
@@ -25,6 +25,9 @@ from difflib import SequenceMatcher
 
 from database.connection import session_scope
 from database.models import CrmDeal, CrmOrganization, MvCampaign, MvCampaignCompany
+
+# Confirmado no RD Station (campo "Fonte" = "Melhor Venda" na negociacao).
+MV_SOURCE_ID = "6a39411c5945e80029aa36ea"
 
 _SUFFIXES = re.compile(r"\b(ltda|me|epp|s ?/ ?a|sa|eireli|mei)\b\.?", re.IGNORECASE)
 _NON_ALNUM = re.compile(r"[^a-z0-9 ]")
@@ -62,7 +65,7 @@ def add_companies(campaign_id: str, companies: list[tuple[str, str | None]]) -> 
 
 def auto_match_campaign(
     campaign_id: str,
-    mv_source_id: str,
+    mv_source_id: str = MV_SOURCE_ID,
     days_buffer: int = 3,
     min_similarity: float = 0.6,
     ambiguous_margin: float = 0.1,
