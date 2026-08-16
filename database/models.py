@@ -95,7 +95,10 @@ class CrmOrganization(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     rd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
-    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)  # = custom_fields['nome-fantasia']
+    # custom_fields['razao-social'] -- essencial pro cruzamento com o Melhor Venda,
+    # que exporta razao social, nao nome fantasia (que e o "name" acima).
+    legal_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     segment: Mapped[str | None] = mapped_column(String, nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

@@ -202,7 +202,10 @@ def auto_match_campaign(
             scored: list[tuple[float, CrmDeal]] = []
             for deal in candidates:
                 org = orgs.get(deal.organization_rd_id)
-                names = [deal.name, org.name if org else None]
+                # legal_name (razao social, campo personalizado no RD) e o que mais
+                # se parece com o que o Melhor Venda exporta -- deal.name/org.name
+                # costumam ser o "nome fantasia", que pode ser bem diferente.
+                names = [deal.name, org.name if org else None, org.legal_name if org else None]
                 scores = [s for n in names if n for s in [_similarity(company.company_name_mv, n)] if s is not None]
                 if scores:
                     best = max(scores)

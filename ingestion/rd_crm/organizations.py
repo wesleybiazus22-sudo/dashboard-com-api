@@ -13,12 +13,14 @@ def sync_organizations(db: Session, updated_since: str | None = None) -> int:
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
+        custom_fields = item.get("custom_fields") or {}
         upsert_by_rd_id(
             db,
             CrmOrganization,
             item["id"],
             {
                 "name": item.get("name"),
+                "legal_name": custom_fields.get("razao-social"),
                 # A API expoe so "segment_ids" (lista de ids), sem nome resolvido na
                 # listagem -- fica None aqui; os ids continuam preservados em "raw".
                 "segment": None,

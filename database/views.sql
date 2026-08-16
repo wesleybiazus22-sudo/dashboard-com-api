@@ -17,6 +17,11 @@ alter table mv_campaign_companies add column if not exists suggested_deal_rd_id 
 alter table mv_campaign_companies add column if not exists suggested_organization_rd_id varchar;
 alter table mv_campaign_companies add column if not exists suggested_score numeric(4, 3);
 
+-- Razao social (custom_fields['razao-social']) -- essencial pro cruzamento com o
+-- Melhor Venda, que exporta razao social, nao o nome fantasia.
+alter table crm_organizations add column if not exists legal_name varchar;
+create index if not exists ix_crm_organizations_legal_name on crm_organizations (legal_name);
+
 
 -- Uma linha por negociacao, com pipeline/etapa ja resolvidos e agrupados por produto.
 -- So inclui negociacoes de pipelines mapeados em PIPELINE_GROUP_MAPPING (Maquina ISP,
