@@ -289,6 +289,8 @@ select
     d.amount,
     d.stage_rd_id,
     s_now.name as stage_name,
+    s_now.canonical_stage,
+    s_now."order" as stage_order,
     d.sdr_owner_rd_id,
     su.name as sdr_name,
     d.closer_owner_rd_id,

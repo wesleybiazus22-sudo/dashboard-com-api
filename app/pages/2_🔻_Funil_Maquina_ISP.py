@@ -13,7 +13,6 @@ from app.theme import (
     CAT_BLUE,
     CAT_ORANGE,
     SEQUENTIAL_BLUE,
-    STATUS_GOOD,
     base_layout,
 )
 
@@ -29,48 +28,76 @@ with refresh_col:
         st.cache_data.clear()
         st.rerun()
 
-funnel_df = query(
-    "select canonical_stage, deals, pipeline_value from v_funnel_summary where product_group = 'Máquina ISP'"
-)
 milestones = query("select * from v_maquina_isp_deal_milestones")
-velocity = query(
-    "select canonical_stage, stage_name, stage_order, media_horas, mediana_horas, parados_agora, "
-    "media_horas_parados_agora from v_stage_velocity where product_group = 'Máquina ISP' order by stage_order"
-)
 
-if funnel_df.empty and milestones.empty:
+if milestones.empty:
     st.info("Sem dados sincronizados ainda pra Máquina ISP.")
     st.stop()
 
+# ---------------------------------------------------------------- Filtros SDR / Closer
+st.subheader("Filtros")
+filtro_col1, filtro_col2 = st.columns(2)
+
+sdrs = sorted(milestones["sdr_name"].dropna().unique())
+closers = sorted(milestones["closer_name"].dropna().unique())
+
+with filtro_col1:
+    sdr_selecionado = st.selectbox("SDR (originou a negociação)", options=["Todos"] + sdrs)
+with filtro_col2:
+    closer_selecionado = st.selectbox("Closer (recebeu a negociação)", options=["Todos"] + closers)
+
+filtrado = milestones.copy()
+if sdr_selecionado != "Todos":
+    filtrado = filtrado[filtrado["sdr_name"] == sdr_selecionado]
+if closer_selecionado != "Todos":
+    filtrado = filtrado[filtrado["closer_name"] == closer_selecionado]
+
+if sdr_selecionado != "Todos" or closer_selecionado != "Todos":
+    partes = []
+    if sdr_selecionado != "Todos":
+        partes.append(f"originadas por **{sdr_selecionado}**")
+    if closer_selecionado != "Todos":
+        partes.append(f"recebidas por **{closer_selecionado}**")
+    st.caption(f"Mostrando {filtrado.shape[0]} negociações " + " e ".join(partes) + ".")
+
+st.divider()
+
 # ---------------------------------------------------------------- KPIs de negócio
-total_leads = int(milestones.shape[0])
-sdr_ganhos = int(milestones["sdr_ganhou"].sum()) if not milestones.empty else 0
-closer_ganhos = int(milestones["closer_ganhou"].sum()) if not milestones.empty else 0
+total_leads = int(filtrado.shape[0])
+sdr_ganhos = int(filtrado["sdr_ganhou"].sum())
+closer_ganhos = int(filtrado["closer_ganhou"].sum())
 taxa_sdr = round(100 * sdr_ganhos / total_leads, 1) if total_leads else 0
 taxa_closer = round(100 * closer_ganhos / sdr_ganhos, 1) if sdr_ganhos else 0
-pipeline_aberto = funnel_df["pipeline_value"].sum() if not funnel_df.empty else 0
+abertas = filtrado[filtrado["deal_status"] == "ongoing"]
+pipeline_aberto = abertas["amount"].sum()
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Negociações no funil", total_leads)
 col2.metric("Ganho SDR", sdr_ganhos, f"{taxa_sdr}% do total", help="Chegou em Reunião Realizada ou além")
 col3.metric("Ganho Closer", closer_ganhos, f"{taxa_closer}% dos ganhos SDR", help="Chegou em Freemium")
 col4.metric("Pipeline aberto", f"R$ {pipeline_aberto:,.0f}".replace(",", "."))
-col5.metric("Negociações abertas", int(funnel_df["deals"].sum()) if not funnel_df.empty else 0)
+col5.metric("Negociações abertas", int(abertas.shape[0]))
 
 st.divider()
 
-# ---------------------------------------------------------------- Funil (snapshot atual)
+# ---------------------------------------------------------------- Funil (snapshot atual, respeita o filtro)
 st.subheader("Funil — negociações abertas por etapa")
 
-funnel_df = funnel_df.set_index("canonical_stage").reindex(CANONICAL_STAGE_ORDER).fillna(0).reset_index()
-funnel_df["label"] = funnel_df["canonical_stage"].map(CANONICAL_STAGE_LABELS)
+funnel_counts = (
+    abertas.groupby("canonical_stage")
+    .agg(deals=("deal_id", "count"), pipeline_value=("amount", "sum"))
+    .reindex(CANONICAL_STAGE_ORDER)
+    .fillna(0)
+    .reset_index()
+)
+funnel_counts["label"] = funnel_counts["canonical_stage"].map(CANONICAL_STAGE_LABELS)
 
 fig_funnel = go.Figure(
     go.Funnel(
-        y=funnel_df["label"],
-        x=funnel_df["deals"],
+        y=funnel_counts["label"],
+        x=funnel_counts["deals"],
         textinfo="value+percent initial",
-        marker=dict(color=SEQUENTIAL_BLUE[: len(funnel_df)]),
+        marker=dict(color=SEQUENTIAL_BLUE[: len(funnel_counts)]),
         connector=dict(line=dict(color="#e1e0d9", width=1)),
     )
 )
@@ -86,6 +113,13 @@ st.divider()
 
 # ---------------------------------------------------------------- Aging / velocity
 st.subheader("Tempo por etapa (velocity)")
+if sdr_selecionado != "Todos" or closer_selecionado != "Todos":
+    st.caption("⚠️ Este gráfico ainda é sempre da base inteira (não respeita o filtro de SDR/Closer acima).")
+
+velocity = query(
+    "select canonical_stage, stage_name, stage_order, media_horas, mediana_horas, parados_agora, "
+    "media_horas_parados_agora from v_stage_velocity where product_group = 'Máquina ISP' order by stage_order"
+)
 
 fig_vel = go.Figure()
 fig_vel.add_trace(
@@ -124,19 +158,17 @@ st.divider()
 
 # ---------------------------------------------------------------- Performance SDR
 st.subheader("Performance por SDR")
-st.caption('"Ganho" aqui = a negociação chegou em Reunião Realizada ou além.')
+st.caption('"Ganho" aqui = a negociação chegou em Reunião Realizada ou além. Tabela sempre mostra todo mundo.')
 
-sdr_perf = query(
-    """
-    select sdr_name, count(*) as leads,
-           count(*) filter (where sdr_ganhou) as ganhos,
-           round(100.0 * count(*) filter (where sdr_ganhou) / nullif(count(*), 0), 1) as taxa_pct
-    from v_maquina_isp_deal_milestones
-    where sdr_name is not null
-    group by sdr_name
-    order by ganhos desc
-    """
+sdr_perf = (
+    milestones[milestones["sdr_name"].notna()]
+    .groupby("sdr_name")
+    .agg(leads=("deal_id", "count"), ganhos=("sdr_ganhou", "sum"))
+    .reset_index()
 )
+sdr_perf["taxa_pct"] = (100 * sdr_perf["ganhos"] / sdr_perf["leads"]).round(1)
+sdr_perf = sdr_perf.sort_values("ganhos", ascending=False)
+
 st.dataframe(
     sdr_perf.rename(columns={"sdr_name": "SDR", "leads": "Leads", "ganhos": "Ganhos", "taxa_pct": "Taxa %"}),
     use_container_width=True,
@@ -145,20 +177,23 @@ st.dataframe(
 
 # ---------------------------------------------------------------- Performance Closer
 st.subheader("Performance por Closer")
-st.caption('"Ganho" aqui = a negociação chegou em Freemium.')
+st.caption('"Ganho" aqui = a negociação chegou em Freemium. Tabela sempre mostra todo mundo.')
 
-closer_perf = query(
-    """
-    select closer_name, count(*) as oportunidades,
-           count(*) filter (where closer_ganhou) as ganhos,
-           round(100.0 * count(*) filter (where closer_ganhou) / nullif(count(*), 0), 1) as taxa_pct,
-           coalesce(sum(amount) filter (where closer_ganhou), 0) as valor_ganho
-    from v_maquina_isp_deal_milestones
-    where closer_name is not null
-    group by closer_name
-    order by ganhos desc
-    """
+closer_base = milestones[milestones["closer_name"].notna()].copy()
+closer_base["valor_se_ganho"] = closer_base["amount"].where(closer_base["closer_ganhou"], 0)
+
+closer_perf = (
+    closer_base.groupby("closer_name")
+    .agg(
+        oportunidades=("deal_id", "count"),
+        ganhos=("closer_ganhou", "sum"),
+        valor_ganho=("valor_se_ganho", "sum"),
+    )
+    .reset_index()
 )
+closer_perf["taxa_pct"] = (100 * closer_perf["ganhos"] / closer_perf["oportunidades"]).round(1)
+closer_perf = closer_perf.sort_values("ganhos", ascending=False)
+
 st.dataframe(
     closer_perf.rename(
         columns={
@@ -167,6 +202,27 @@ st.dataframe(
             "ganhos": "Ganhos",
             "taxa_pct": "Taxa %",
             "valor_ganho": "Valor Ganho (R$)",
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.divider()
+
+# ---------------------------------------------------------------- Detalhe das negociações filtradas
+st.subheader("Negociações")
+detail_cols = ["deal_name", "stage_name", "deal_status", "amount", "sdr_name", "closer_name", "deal_created_at"]
+st.dataframe(
+    filtrado[detail_cols].rename(
+        columns={
+            "deal_name": "Negociação",
+            "stage_name": "Etapa",
+            "deal_status": "Status",
+            "amount": "Valor",
+            "sdr_name": "SDR",
+            "closer_name": "Closer",
+            "deal_created_at": "Criada em",
         }
     ),
     use_container_width=True,
