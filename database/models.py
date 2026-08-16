@@ -296,6 +296,8 @@ class MvCampaign(Base):
     __tablename__ = "mv_campaigns"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    sdr_name: Mapped[str | None] = mapped_column(String, nullable=True)  # nome da SDR responsavel, ex: "Miriã"
+    label: Mapped[str | None] = mapped_column(String, nullable=True)  # ex: "Agosto/Semana 1"
     week_start: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
     week_end: Mapped[datetime] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -314,7 +316,8 @@ class MvCampaignCompany(Base):
     campaign_id: Mapped[str] = mapped_column(String, ForeignKey("mv_campaigns.id"), nullable=False, index=True)
 
     company_name_mv: Mapped[str] = mapped_column(String, nullable=False)  # nome como aparece no MV
-    mv_status: Mapped[str | None] = mapped_column(String, nullable=True)  # status dentro do MV
+    cnpj_mv: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    mv_status: Mapped[str | None] = mapped_column(String, nullable=True)  # status dentro do MV (Conectado/Sem Retorno)
 
     matched_organization_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     matched_deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

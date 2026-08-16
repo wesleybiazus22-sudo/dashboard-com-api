@@ -7,6 +7,13 @@
 alter table crm_pipelines add column if not exists product_group varchar;
 create index if not exists ix_crm_pipelines_product_group on crm_pipelines (product_group);
 
+-- Colunas novas nas tabelas do Melhor Venda (seguro rodar mesmo se as tabelas
+-- ja tiverem sido criadas antes por scripts/init_db.py sem essas colunas).
+alter table mv_campaigns add column if not exists sdr_name varchar;
+alter table mv_campaigns add column if not exists label varchar;
+alter table mv_campaign_companies add column if not exists cnpj_mv varchar;
+create index if not exists ix_mv_campaign_companies_cnpj_mv on mv_campaign_companies (cnpj_mv);
+
 
 -- Uma linha por negociacao, com pipeline/etapa ja resolvidos e agrupados por produto.
 -- So inclui negociacoes de pipelines mapeados em PIPELINE_GROUP_MAPPING (Maquina ISP,
