@@ -16,11 +16,14 @@ def sync_tasks(db: Session, updated_since: str | None = None) -> int:
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
-        # Padrao confirmado em deals/contacts: campos de referencia vem diretos
-        # (deal_id, user_id), nao aninhados. Mantemos fallback aninhado por seguranca
-        # ate confirmar com `python -m scripts.dump_sample tasks`.
+        # Nomes reais confirmados contra o payload do RD v2 (ver raw): o assunto vem
+        # em `name` (nao `subject`/`text`), a conclusao em `completed_at` (nao
+        # `finished_at`/`done_at`) e o responsavel em `owner_ids` -- uma LISTA, nao um
+        # `user_id` escalar. Os fallbacks antigos nunca casavam com nada, e o efeito
+        # era silencioso: as colunas ficavam nulas em 100% das linhas e toda a dimensao
+        # de atividade (canal de toque, tempo ate o primeiro contato) ficava morta.
         deal = item.get("deal") or {}
-        owner = item.get("user") or item.get("owner") or {}
+        owner_ids = item.get("owner_ids") or []
 
         upsert_by_rd_id(
             db,
@@ -29,11 +32,11 @@ def sync_tasks(db: Session, updated_since: str | None = None) -> int:
             {
                 "deal_rd_id": item.get("deal_id") or deal.get("id"),
                 "type": item.get("type"),
-                "subject": item.get("subject") or item.get("text"),
-                "owner_rd_id": item.get("user_id") or item.get("owner_id") or owner.get("id"),
+                "subject": item.get("name") or item.get("subject") or item.get("text"),
+                "owner_rd_id": (owner_ids[0] if owner_ids else None) or item.get("user_id"),
                 "status": item.get("status") or ("done" if item.get("done") else "pending"),
                 "due_at": parse_dt(item.get("due_date") or item.get("date")),
-                "completed_at": parse_dt(item.get("finished_at") or item.get("done_at")),
+                "completed_at": parse_dt(item.get("completed_at")),
                 "raw": item,
             },
         )

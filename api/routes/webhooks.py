@@ -9,6 +9,8 @@ o mesmo evento, ele e apenas confirmado e ignorado na segunda vez.
 import uuid
 from datetime import datetime
 
+from secrets import compare_digest
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -51,7 +53,8 @@ async def receive_rd_webhook(
     token: str = Query(..., description="Token combinado na URL cadastrada no RD Station."),
     db: Session = Depends(get_db),
 ):
-    if token != settings.rd_webhook_token:
+    # segredo vazio = webhook desligado (ver comentario em api/routes/sync.py)
+    if not settings.rd_webhook_token or not compare_digest(token, settings.rd_webhook_token):
         raise HTTPException(status_code=401, detail="Token invalido.")
 
     payload = await request.json()

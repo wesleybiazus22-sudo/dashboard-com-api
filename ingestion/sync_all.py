@@ -23,6 +23,7 @@ from ingestion.rd_crm import lost_reasons as lost_reasons_sync
 from ingestion.rd_crm import meetings as meetings_sync
 from ingestion.rd_crm import organizations as organizations_sync
 from ingestion.rd_crm import pipelines as pipelines_sync
+from ingestion.rd_crm import sources as sources_sync
 from ingestion.rd_crm import tasks as tasks_sync
 from ingestion.rd_crm import users as users_sync
 
@@ -57,7 +58,7 @@ def _run_step(db, label: str, fn) -> bool:
         return False
 
 
-def run_full_sync() -> None:
+def run_full_sync() -> set[str]:
     ok_entities: set[str] = set()
 
     with session_scope() as db:
@@ -69,6 +70,8 @@ def run_full_sync() -> None:
 
         _run_step(db, "pipelines/etapas", _pipelines)
         _run_step(db, "motivos de perda", lambda: lost_reasons_sync.sync_lost_reasons(db))
+        _run_step(db, "origens", lambda: sources_sync.sync_deal_sources(db))
+        _run_step(db, "campanhas", lambda: sources_sync.sync_campaigns(db))
 
         if _run_step(db, "empresas", lambda: organizations_sync.sync_organizations(db)):
             ok_entities.add("organizations")
@@ -91,9 +94,10 @@ def run_full_sync() -> None:
         print(f"Carga inicial concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:
         print("Carga inicial concluida.")
+    return faltando
 
 
-def run_incremental_sync() -> None:
+def run_incremental_sync() -> set[str]:
     now = datetime.now(timezone.utc)
     ok_entities: set[str] = set()
 
@@ -107,6 +111,8 @@ def run_incremental_sync() -> None:
 
         _run_step(db, "pipelines/etapas", _pipelines)
         _run_step(db, "motivos de perda", lambda: lost_reasons_sync.sync_lost_reasons(db))
+        _run_step(db, "origens", lambda: sources_sync.sync_deal_sources(db))
+        _run_step(db, "campanhas", lambda: sources_sync.sync_campaigns(db))
 
         since = _get_last_synced_at(db, "organizations")
         since_iso = since.isoformat(timespec="seconds") if since else None
@@ -146,14 +152,22 @@ def run_incremental_sync() -> None:
         print(f"Sincronizacao incremental concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:
         print("Sincronizacao incremental concluida.")
+    return faltando
 
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "incremental"
     if mode == "full":
-        run_full_sync()
+        faltando = run_full_sync()
     elif mode == "incremental":
-        run_incremental_sync()
+        faltando = run_incremental_sync()
     else:
         print("Uso: python -m ingestion.sync_all [full|incremental]")
+        sys.exit(1)
+
+    # Sai com codigo != 0 quando alguma entidade falhou. `_run_step` engole a excecao
+    # de proposito (pra uma entidade instavel nao derrubar as outras), mas sem isto o
+    # processo terminaria 0 mesmo com tudo quebrado -- e o agendador (GitHub Actions)
+    # mostraria verde numa rodada que nao sincronizou nada.
+    if faltando:
         sys.exit(1)

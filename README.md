@@ -163,10 +163,55 @@ Dali em diante, duas coisas mantêm o banco em dia:
    ```bash
    python -m ingestion.sync_all incremental
    ```
-   Agende isso a cada 5-15 min com o Agendador de Tarefas do Windows, um cron
-   (se rodar em Linux), ou um workflow no n8n chamando `POST /sync/rd/incremental`.
+   Em produção isso roda sozinho pelo GitHub Actions
+   (`.github/workflows/sync-incremental.yml`), a cada 15 min — ver seção 10.
 
-## 10. Onde isso te deixa
+## 10. Deploy: dashboard no ar + sync automático
+
+### 10.1 Sincronização a cada 15 min (GitHub Actions)
+
+O workflow `sync-incremental.yml` roda `python -m ingestion.sync_all incremental`
+**dentro do próprio runner**, falando direto com o Postgres. Ele não passa pela API
+do Render de propósito: no plano free o serviço dorme após ~15 min sem tráfego, e a
+sincronização (que roda como `BackgroundTask`) podia ser morta no meio, deixando o
+`sync_state` parcialmente avançado sem sinal nenhum de erro.
+
+Configure em **Settings → Secrets and variables → Actions** do repositório:
+
+| Secret | Para quê |
+| --- | --- |
+| `DATABASE_URL` | conexão do Postgres (Supabase) |
+| `RD_CRM_CLIENT_ID` | OAuth do RD CRM |
+| `RD_CRM_CLIENT_SECRET` | OAuth do RD CRM |
+| `RD_CRM_REDIRECT_URI` | OAuth do RD CRM |
+
+Duas limitações do agendador do GitHub, que valem conhecer:
+- o disparo é *melhor esforço* — sob carga atrasa alguns minutos (a sincronização é
+  incremental e idempotente, então atraso só adia dados, não duplica nada);
+- o GitHub **desativa schedules em repositórios sem commits há 60 dias** — se o
+  projeto ficar parado, reative o workflow na aba Actions.
+
+O job termina com código de saída != 0 quando alguma entidade falha, então uma
+rodada quebrada aparece vermelha na aba Actions em vez de passar despercebida.
+
+### 10.2 Dashboard no Streamlit Community Cloud
+
+1. Em [share.streamlit.io](https://share.streamlit.io), conecte este repositório.
+2. **Main file path**: `app/Home.py`.
+3. Em **Advanced settings → Secrets**, cole:
+   ```toml
+   DATABASE_URL = "postgresql://..."
+   ```
+   Só isso: o dashboard lê apenas o banco. As credenciais do RD CRM são opcionais no
+   `config/settings.py` justamente para o dashboard não precisar delas.
+
+As dependências vêm do `requirements.txt` da raiz — o Streamlit Cloud sempre usa esse
+arquivo, por isso `streamlit`/`plotly`/`pandas` moram lá junto com as libs da API.
+
+O app hiberna após alguns dias sem acesso e acorda no primeiro acesso seguinte. Se a
+espera incomodar, um Web Service no Render (plano pago) não hiberna.
+
+## 11. Onde isso te deixa
 
 Depois desses passos você tem, no Postgres:
 - `crm_deals` com o estado atual de cada negociação, incluindo `sdr_owner_rd_id`,

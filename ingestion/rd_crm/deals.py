@@ -14,8 +14,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import CrmDeal, CrmDealOwnerHistory, CrmDealStageHistory
+from database.models import CrmDeal
 from ingestion.rd_crm.client import RDCrmClient
+from ingestion.rd_crm.deal_history import snapshot_deal, sync_deal_history
 from ingestion.rd_crm.entities import parse_dt, upsert_by_rd_id
 
 ENDPOINT = "/deals"
@@ -43,50 +44,17 @@ def extract_deal_fields(item: dict) -> dict:
     }
 
 
-def _seed_history_if_missing(db: Session, deal: CrmDeal, fields: dict) -> None:
-    """Na primeira carga não temos o histórico real de mudanças -- criamos uma linha
-    'aberta' representando o estado atual, que será fechada e sucedida por novas linhas
-    assim que os webhooks de crm_deal_updated começarem a chegar."""
-    baseline_at = fields["deal_created_at"] or datetime.now(timezone.utc)
-
-    has_stage_history = (
-        db.query(CrmDealStageHistory).filter(CrmDealStageHistory.deal_rd_id == deal.rd_id).first()
-    )
-    if not has_stage_history and fields["stage_rd_id"]:
-        db.add(
-            CrmDealStageHistory(
-                deal_id=deal.id,
-                deal_rd_id=deal.rd_id,
-                stage_rd_id=fields["stage_rd_id"],
-                pipeline_rd_id=fields["pipeline_rd_id"],
-                owner_rd_id=fields["current_owner_rd_id"],
-                entered_at=baseline_at,
-            )
-        )
-
-    has_owner_history = (
-        db.query(CrmDealOwnerHistory).filter(CrmDealOwnerHistory.deal_rd_id == deal.rd_id).first()
-    )
-    if not has_owner_history and fields["current_owner_rd_id"]:
-        db.add(
-            CrmDealOwnerHistory(
-                deal_id=deal.id,
-                deal_rd_id=deal.rd_id,
-                owner_rd_id=fields["current_owner_rd_id"],
-                assigned_at=baseline_at,
-            )
-        )
-
-
 def _sync(db: Session, params: dict | None) -> int:
     client = RDCrmClient(db)
     count = 0
 
     for item in client.paginate(ENDPOINT, params=params):
         fields = extract_deal_fields(item)
+        previous = snapshot_deal(db.query(CrmDeal).filter(CrmDeal.rd_id == item["id"]).one_or_none())
         deal = upsert_by_rd_id(db, CrmDeal, item["id"], fields)
         db.flush()  # garante deal.id preenchido antes de referenciar em history
-        _seed_history_if_missing(db, deal, fields)
+        at = fields["deal_updated_at"] or datetime.now(timezone.utc)
+        sync_deal_history(db, previous, deal, fields, at)
         count += 1
 
     db.commit()

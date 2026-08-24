@@ -70,25 +70,61 @@ group by product_group, canonical_stage;
 -- Uma linha por periodo em que uma negociacao ficou parada numa etapa -- base de
 -- aging/velocity. "duration_hours" com exited_at nulo mede o tempo corrido ate agora
 -- (etapa ainda aberta).
+--
+-- Reclassificacao de perdidas (pedido do usuario): quando uma negociacao e marcada
+-- "lost" mas ninguem move o card no RD pra etapa de encerramento (fica parada em
+-- "Primeira Conexao"/"Em Prospeccao"/etc pra sempre), o "tempo parado nessa etapa"
+-- cresce indefinidamente e polui a metrica de velocity -- a etapa parece um gargalo
+-- gigante quando na verdade e so lead morto que ninguem arquivou. Por isso, a linha
+-- de historico ainda ABERTA (exited_at nulo) de uma negociacao "lost" e tratada aqui
+-- como se tivesse migrado pra "Encerrado/Standby" (canonical_stage LOST) no momento
+-- em que foi perdida (d.closed_at = a "data de evolucao" pedida), em vez de continuar
+-- contando tempo ate agora na etapa original. Isso e só uma reclassificacao de
+-- RELATORIO -- nao mexe no card real do RD nem no historico bruto (crm_deal_stage_history).
 create or replace view v_deal_stage_aging as
+with base as (
+    select
+        sh.deal_rd_id, sh.pipeline_rd_id, sh.stage_rd_id, sh.owner_rd_id,
+        sh.entered_at, sh.exited_at as raw_exited_at,
+        d.name as deal_name, d.status as deal_status, d.closed_at,
+        p.product_group,
+        s.name as stage_name, s.canonical_stage, s."order" as stage_order,
+        (d.status = 'lost' and sh.exited_at is null) as vira_encerrado_standby
+    from crm_deal_stage_history sh
+    join crm_deals d on d.id = sh.deal_id
+    left join crm_pipelines p on p.rd_id = sh.pipeline_rd_id
+    left join crm_stages s on s.rd_id = sh.stage_rd_id
+)
 select
-    sh.deal_rd_id as deal_id,
-    d.name as deal_name,
-    d.status as deal_status,
-    p.product_group,
-    sh.pipeline_rd_id,
-    sh.stage_rd_id,
-    s.name as stage_name,
-    s.canonical_stage,
-    s."order" as stage_order,
-    sh.owner_rd_id,
-    sh.entered_at,
-    sh.exited_at,
-    extract(epoch from (coalesce(sh.exited_at, now()) - sh.entered_at)) / 3600 as duration_hours
-from crm_deal_stage_history sh
-join crm_deals d on d.id = sh.deal_id
-left join crm_pipelines p on p.rd_id = sh.pipeline_rd_id
-left join crm_stages s on s.rd_id = sh.stage_rd_id;
+    deal_rd_id as deal_id,
+    deal_name,
+    deal_status,
+    product_group,
+    pipeline_rd_id,
+    stage_rd_id,
+    case when vira_encerrado_standby then 'Encerrado/Standby' else stage_name end as stage_name,
+    case when vira_encerrado_standby then 'LOST' else canonical_stage end as canonical_stage,
+    case
+        when vira_encerrado_standby
+        -- por produto, nao por pipeline: "Encerrado/Standby" so existe como etapa de
+        -- verdade na pipeline de Qualificacao -- sem isso, negociacoes perdidas que
+        -- morreram dentro da pipeline Closer cairiam num stage_order nulo e vira-
+        -- riam um segundo grupo "Encerrado/Standby" fantasma no velocity.
+        then (
+            select min(s2."order") from crm_stages s2
+            join crm_pipelines p2 on p2.rd_id = s2.pipeline_rd_id
+            where p2.product_group = base.product_group and s2.canonical_stage = 'LOST'
+        )
+        else stage_order
+    end as stage_order,
+    owner_rd_id,
+    entered_at,
+    case when vira_encerrado_standby then coalesce(closed_at, now()) else raw_exited_at end as exited_at,
+    extract(epoch from (
+        coalesce(case when vira_encerrado_standby then coalesce(closed_at, now()) else raw_exited_at end, now())
+        - entered_at
+    )) / 3600 as duration_hours
+from base;
 
 
 -- So as etapas correntes (onde cada negociacao esta agora) com o tempo ja decorrido --
@@ -120,6 +156,50 @@ from v_deal_stage_aging
 where product_group is not null
 group by product_group, canonical_stage, stage_name, stage_order
 order by product_group, stage_order;
+
+
+-- Tempo de MOVIMENTACAO entre etapas -- diferente de v_stage_velocity (que mede
+-- quanto tempo uma negociacao FICA parada numa etapa), esta mede quanto tempo leva
+-- entre ENTRAR numa etapa e ENTRAR na proxima -- a passagem de uma etapa pra outra
+-- de verdade, olhando so a sequencia que cada negociacao realmente percorreu (usa
+-- v_deal_stage_aging como base, entao ja herda a reclassificacao de perdidas como
+-- Encerrado/Standby -- uma negociacao que morre logo depois de entrar numa etapa
+-- aparece aqui como "<etapa anterior> -> Encerrado/Standby").
+create or replace view v_deal_stage_transitions as
+with ordenado as (
+    select
+        deal_id, pipeline_rd_id, product_group,
+        canonical_stage as de_etapa, stage_name as de_etapa_nome, stage_order as de_ordem,
+        entered_at as de_entrada,
+        lead(canonical_stage) over (partition by deal_id order by entered_at) as para_etapa,
+        lead(stage_name) over (partition by deal_id order by entered_at) as para_etapa_nome,
+        lead(entered_at) over (partition by deal_id order by entered_at) as para_entrada
+    from v_deal_stage_aging
+)
+select
+    deal_id, pipeline_rd_id, product_group,
+    de_etapa, de_etapa_nome, de_ordem,
+    para_etapa, para_etapa_nome,
+    de_entrada, para_entrada,
+    extract(epoch from (para_entrada - de_entrada)) / 3600 as transicao_horas
+from ordenado
+where para_entrada is not null;
+
+
+-- Agregado por par de etapas (de -> para): media/mediana do tempo de transicao e
+-- quantas negociacoes fizeram esse movimento especifico.
+create or replace view v_stage_transition_velocity as
+select
+    product_group,
+    de_etapa, de_etapa_nome, de_ordem,
+    para_etapa, para_etapa_nome,
+    count(*) as transicoes,
+    round(avg(transicao_horas)::numeric, 1) as media_horas,
+    round(percentile_cont(0.5) within group (order by transicao_horas)::numeric, 1) as mediana_horas
+from v_deal_stage_transitions
+where product_group is not null
+group by product_group, de_etapa, de_etapa_nome, de_ordem, para_etapa, para_etapa_nome
+order by product_group, de_ordem;
 
 
 -- Performance de SDR: originacao (quem trouxe a negociacao), independente de quem
@@ -207,6 +287,9 @@ order by product_group, mes, evento;
 -- atual no CRM quando ha match. company_name_mv/mv_status sempre aparecem mesmo sem
 -- match, pra dar visao completa do funil MV -> CRM (quantas conectaram, quantas
 -- viraram negociacao, em que etapa estao agora).
+-- IMPORTANTE: campaign_label NAO e unico -- duas SDRs podem ter uma campanha com o
+-- mesmo rotulo de semana (ex: "Agosto/Semana 2" da Miriã e da Letícia, coincidencia
+-- de nome, campanhas de verdade diferentes). Filtros/joins devem usar campaign_id.
 create or replace view v_mv_campaign_status as
 select
     mc.week_start,
@@ -228,7 +311,8 @@ select
     -- confirmada) -- deal_id/deal_name acima ficam vazios nesse caso.
     mcc.suggested_deal_rd_id,
     sd.name as suggested_deal_name,
-    mcc.suggested_score
+    mcc.suggested_score,
+    mc.id as campaign_id
 from mv_campaign_companies mcc
 join mv_campaigns mc on mc.id = mcc.campaign_id
 left join crm_deals d on d.rd_id = mcc.matched_deal_rd_id
@@ -270,6 +354,27 @@ order by mc.week_start;
 -- estar "ongoing" e ja ter alcancado Freemium, ou "lost" depois de ter chegado la).
 -- Usa a ORDEM da etapa dentro do pipeline Closer (nao so o nome exato), pra nao
 -- perder casos onde a negociacao pulou uma etapa no caminho.
+--
+-- IMPORTANTE: o EXISTS contra crm_deal_stage_history sozinho SUBESTIMA os ganhos --
+-- ate a correcao em ingestion/rd_crm/deal_history.py, a sincronizacao via polling so
+-- gravava a linha "seed" na primeira vez que via a negociacao e nunca mais atualizava
+-- o historico quando a etapa avancava (soh o webhook fazia isso, e ainda assim tinha
+-- um bug de identity-map do SQLAlchemy que fazia a comparacao "antes vs depois" nunca
+-- detectar mudanca -- ver commit que corrigiu). Isso deixava o historico "congelado" no
+-- estado inicial pra varias negociacoes, mesmo com elas ja tendo avancado de verdade.
+-- Por isso o criterio agora tambem usa a ETAPA ATUAL da negociacao (d.stage_rd_id,
+-- que a sincronizacao sempre mantem correta) como sinal adicional -- se ela esta
+-- atualmente numa etapa >= o marco, conta como "ganho", mesmo que o historico nao
+-- tenha uma linha provando a passagem por la.
+--
+-- Escopo do funil (definido pelo usuario):
+-- - Negociacoes vinculadas (como SDR, closer OU dono atual) a Jonatas dos Reis da
+--   Silva, Adriano Lopes, Wesley Biazus ou Ingrid sao excluidas -- esses perfis nao
+--   sao SDR/Closer reais do Maquina ISP (contas internas/teste), entao contaminam a
+--   performance por SDR/Closer se entrarem na conta.
+-- - So entram negociacoes criadas a partir de 01/04/2026 -- e quando o Maquina ISP
+--   comecou de fato como produto; qualquer coisa antes disso e ruido de antes do
+--   funil existir.
 create or replace view v_maquina_isp_deal_milestones as
 with closer_pipeline as (
     select rd_id from crm_pipelines where name = '[Máquina ISP] Closer'
@@ -281,6 +386,10 @@ reuniao_realizada as (
 freemium as (
     select s."order" as ord from crm_stages s, closer_pipeline cp
     where s.pipeline_rd_id = cp.rd_id and s.name = 'Freemium'
+),
+perfis_excluidos as (
+    select rd_id from crm_users
+    where name in ('Jônatas dos Reis da Silva', 'Adriano Lopes', 'Wesley Biazus', 'Ingrid')
 )
 select
     d.rd_id as deal_id,
@@ -296,19 +405,25 @@ select
     d.handoff_at,
     d.deal_created_at,
     d.closed_at,
-    exists (
-        select 1
-        from crm_deal_stage_history sh
-        join crm_stages s on s.rd_id = sh.stage_rd_id
-        join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
-        where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from reuniao_realizada)
+    (
+        (d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from reuniao_realizada))
+        or exists (
+            select 1
+            from crm_deal_stage_history sh
+            join crm_stages s on s.rd_id = sh.stage_rd_id
+            join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+            where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from reuniao_realizada)
+        )
     ) as sdr_ganhou,
-    exists (
-        select 1
-        from crm_deal_stage_history sh
-        join crm_stages s on s.rd_id = sh.stage_rd_id
-        join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
-        where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from freemium)
+    (
+        (d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from freemium))
+        or exists (
+            select 1
+            from crm_deal_stage_history sh
+            join crm_stages s on s.rd_id = sh.stage_rd_id
+            join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+            where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from freemium)
+        )
     ) as closer_ganhou,
     s_now.canonical_stage,
     s_now."order" as stage_order
@@ -317,4 +432,8 @@ join crm_pipelines p on p.rd_id = d.pipeline_rd_id
 left join crm_stages s_now on s_now.rd_id = d.stage_rd_id
 left join crm_users su on su.rd_id = d.sdr_owner_rd_id
 left join crm_users cu on cu.rd_id = d.closer_owner_rd_id
-where p.product_group = 'Máquina ISP';
+where p.product_group = 'Máquina ISP'
+  and d.deal_created_at >= '2026-04-01'
+  and (d.sdr_owner_rd_id is null or d.sdr_owner_rd_id not in (select rd_id from perfis_excluidos))
+  and (d.closer_owner_rd_id is null or d.closer_owner_rd_id not in (select rd_id from perfis_excluidos))
+  and (d.current_owner_rd_id is null or d.current_owner_rd_id not in (select rd_id from perfis_excluidos));

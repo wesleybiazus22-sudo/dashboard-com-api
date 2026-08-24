@@ -5,10 +5,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # garante que "app
 
 import streamlit as st
 
-st.set_page_config(page_title="Marketing & Sales Data Hub", page_icon="📊", layout="wide")
+from app.theme import inject_brand, render_brand_header
 
-st.title("📊 Marketing & Sales Data Hub")
-st.caption("Dados do RD Station CRM + Melhor Venda, sincronizados automaticamente.")
+st.set_page_config(page_title="Marketing & Sales Data Hub", page_icon="📊", layout="wide")
+inject_brand()
+
+render_brand_header("Marketing & Sales Data Hub", "Dados do RD Station CRM + Melhor Venda, sincronizados automaticamente.")
 
 st.markdown(
     """

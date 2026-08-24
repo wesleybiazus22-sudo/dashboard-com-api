@@ -10,6 +10,8 @@ Roda em background porque a carga completa pode demorar bastante dependendo do
 volume de negociacoes.
 """
 
+from secrets import compare_digest
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from config.settings import settings
@@ -19,7 +21,12 @@ router = APIRouter(prefix="/sync/rd", tags=["sync"])
 
 
 def _check_token(token: str) -> None:
-    if token != settings.sync_trigger_token:
+    """Segredo vazio significa endpoint DESLIGADO, nunca "aceita qualquer token".
+    Sem esta guarda, um deploy que esquecesse de definir SYNC_TRIGGER_TOKEN passaria
+    a aceitar `?token=` vazio de qualquer origem -- o default vazio do Settings
+    transformaria um erro de configuracao em porta aberta."""
+    esperado = settings.sync_trigger_token
+    if not esperado or not compare_digest(token, esperado):
         raise HTTPException(status_code=401, detail="Token invalido.")
 
 

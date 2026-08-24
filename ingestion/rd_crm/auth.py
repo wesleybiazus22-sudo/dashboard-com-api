@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy.orm import Session
 
-from config.settings import settings
+from config.settings import require_rd_credentials, settings
 from database.models import OAuthToken
 
 PRODUCT = "crm"
@@ -23,6 +23,7 @@ _EXPIRY_SAFETY_MARGIN = timedelta(minutes=5)
 
 def get_authorization_url() -> str:
     """URL para o usuário abrir no navegador e autorizar o app no RD Station."""
+    require_rd_credentials()
     return (
         f"{settings.rd_auth_dialog_url}"
         f"?response_type=code"
@@ -38,6 +39,7 @@ def exchange_code_for_token(db: Session, code: str) -> OAuthToken:
     application/x-www-form-urlencoded (nao JSON) -- httpx faz isso
     automaticamente quando passamos `data=` em vez de `json=`.
     """
+    require_rd_credentials()
     response = httpx.post(
         settings.rd_token_url,
         data={
@@ -55,6 +57,7 @@ def exchange_code_for_token(db: Session, code: str) -> OAuthToken:
 
 
 def _refresh_token(db: Session, refresh_token: str) -> OAuthToken:
+    require_rd_credentials()
     response = httpx.post(
         settings.rd_token_url,
         data={

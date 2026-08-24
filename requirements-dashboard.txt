@@ -1,4 +1,3 @@
+# Mantido so por compatibilidade com quem ja rodava este arquivo localmente.
+# As dependencias reais estao todas em requirements.txt (ver comentario la).
 -r requirements.txt
-streamlit==1.39.0
-plotly==5.24.1
-pandas==2.2.3

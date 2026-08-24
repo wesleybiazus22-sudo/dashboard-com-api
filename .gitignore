@@ -10,3 +10,6 @@ venv/
 .pytest_cache/
 .streamlit/secrets.toml
 *.log
+
+# Scripts descartaveis de exploracao/diagnostico -- nao fazem parte do projeto.
+.tmp_explore/

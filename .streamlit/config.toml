@@ -1,0 +1,10 @@
+# Tema visual do dashboard, alinhado ao Develcode Design System
+# (claude.ai/design, projeto "Develcode Design System" -- tokens/colors.css).
+# Fonte real (Satoshi/Montserrat) e raio de borda sao aplicados via CSS em
+# app/theme.py:inject_brand(), chamado no topo de cada pagina.
+[theme]
+primaryColor = "#0057EA"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7F9"
+textColor = "#0A0B0D"
+font = "sans serif"

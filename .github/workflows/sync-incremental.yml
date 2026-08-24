@@ -1,16 +1,51 @@
 name: Sincronizacao incremental RD CRM
 
+# Roda a sincronizacao DENTRO do proprio runner, em vez de chamar a API no Render.
+#
+# A versao anterior fazia POST /sync/rd/incremental, que agenda a sincronizacao como
+# BackgroundTask e responde na hora. Isso tinha dois pontos de falha que nao davam
+# sinal nenhum de erro:
+#   1. no plano free o servico dorme apos ~15 min sem trafego; o cold start podia
+#      estourar o --max-time do curl e o ciclo era perdido em silencio;
+#   2. mesmo quando respondia, o Render podia derrubar a instancia assim que a
+#      requisicao terminava -- matando a sincronizacao no meio, com o `sync_state`
+#      ja parcialmente avancado.
+# Rodando aqui, a sincronizacao fala direto com o Postgres e o job so termina quando
+# ela termina de verdade -- e falha visivelmente se algo der errado.
+
 on:
   schedule:
+    # A cada 15 min. O agendador do GitHub e "melhor esforco": sob carga o disparo
+    # atrasa alguns minutos. Como a sincronizacao e incremental e idempotente
+    # (`sync_state` guarda o ultimo ponto), atraso so adia dados -- nao duplica nada.
     - cron: "*/15 * * * *"
   workflow_dispatch: {}
+
+# Duas rodadas simultaneas competiriam pelo mesmo `sync_state` e pelo refresh do
+# token OAuth. Se uma rodada demorar mais que o intervalo, a proxima espera.
+concurrency:
+  group: sync-rd-crm
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Disparar /sync/rd/incremental na API
-        run: |
-          curl -sf -X POST \
-            "https://dashboard-com-api.onrender.com/sync/rd/incremental?token=${{ secrets.SYNC_TRIGGER_TOKEN }}" \
-            --max-time 60 --retry 2 --retry-delay 5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Rodar sincronizacao incremental
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RD_CRM_CLIENT_ID: ${{ secrets.RD_CRM_CLIENT_ID }}
+          RD_CRM_CLIENT_SECRET: ${{ secrets.RD_CRM_CLIENT_SECRET }}
+          RD_CRM_REDIRECT_URI: ${{ secrets.RD_CRM_REDIRECT_URI }}
+        run: python -m ingestion.sync_all incremental

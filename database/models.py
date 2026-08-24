@@ -155,6 +155,34 @@ class CrmLostReason(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class CrmDealSource(Base):
+    """Origem da negociacao (ex: "Melhor Venda", "Feiras e Eventos", "Prospeccao
+    Ativa"). No RD isso vem so como um id dentro da negociacao (`source_id`) -- sem
+    esta tabela de lookup o dashboard nao consegue mostrar/filtrar por origem, que e
+    uma das dimensoes analiticas mais importantes do funil."""
+
+    __tablename__ = "crm_deal_sources"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    rd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class CrmCampaign(Base):
+    """Campanha de marketing vinculada a negociacao (`campaign_id` no RD). Mesma
+    logica de CrmDealSource: sem o lookup, so temos ids opacos."""
+
+    __tablename__ = "crm_campaigns"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    rd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 # ======================================================================
 # FATOS (sales)
 # ======================================================================
@@ -353,6 +381,8 @@ __all__ = [
     "CrmPipeline",
     "CrmStage",
     "CrmLostReason",
+    "CrmDealSource",
+    "CrmCampaign",
     "CrmDeal",
     "CrmDealStageHistory",
     "CrmDealOwnerHistory",
