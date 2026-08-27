@@ -15,8 +15,10 @@ import sys
 import traceback
 from datetime import datetime, timezone
 
+from config.settings import settings
 from database.connection import session_scope
 from database.models import SyncState
+from ingestion.meta_ads import sync as meta_sync
 from ingestion.rd_crm import contacts as contacts_sync
 from ingestion.rd_crm import deals as deals_sync
 from ingestion.rd_crm import lost_reasons as lost_reasons_sync
@@ -58,6 +60,29 @@ def _run_step(db, label: str, fn) -> bool:
         return False
 
 
+def _sync_meta_ads(full: bool) -> bool:
+    """Sincroniza Meta Ads se META_ACCESS_TOKEN estiver configurado. Devolve True
+    tanto quando tudo vai bem QUANTO quando esta simplesmente desligado (sem
+    credenciais) -- so devolve False quando esta configurado e algo falhou de
+    verdade, pra nao acender alarme falso em quem ainda nao conectou o Meta."""
+    if not settings.meta_access_token:
+        print("  meta ads: pulado (META_ACCESS_TOKEN nao configurado)")
+        return True
+
+    ok = True
+    with session_scope() as db:
+        ok &= _run_step(db, "meta ads: campanhas", lambda: meta_sync.sync_campaigns(db))
+        ok &= _run_step(db, "meta ads: conjuntos de anuncios", lambda: meta_sync.sync_adsets(db))
+        ok &= _run_step(db, "meta ads: anuncios", lambda: meta_sync.sync_ads(db))
+        if full:
+            ok &= _run_step(db, "meta ads: performance (historico completo)", lambda: meta_sync.sync_insights(db))
+        else:
+            ok &= _run_step(
+                db, "meta ads: performance (ultimos dias)", lambda: meta_sync.sync_insights_incremental(db)
+            )
+    return ok
+
+
 def run_full_sync() -> set[str]:
     ok_entities: set[str] = set()
 
@@ -89,7 +114,11 @@ def run_full_sync() -> set[str]:
         for entity in ok_entities:
             _set_last_synced_at(db, entity, now)
 
+    meta_ok = _sync_meta_ads(full=True)
+
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
+    if not meta_ok:
+        faltando.add("meta_ads")
     if faltando:
         print(f"Carga inicial concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:
@@ -147,7 +176,11 @@ def run_incremental_sync() -> set[str]:
         for entity in ok_entities:
             _set_last_synced_at(db, entity, now)
 
+    meta_ok = _sync_meta_ads(full=False)
+
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
+    if not meta_ok:
+        faltando.add("meta_ads")
     if faltando:
         print(f"Sincronizacao incremental concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:

@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     rd_webhook_token: str = ""
     sync_trigger_token: str = ""
 
+    # Meta Ads (Marketing API). Opcionais pela mesma razao das credenciais do RD:
+    # o dashboard nao pode depender delas pra subir. `meta_access_token` e o token
+    # de um USUARIO DO SISTEMA (nao de usuario comum) -- nao expira em 60 dias como
+    # um token pessoal, entao nao precisa de fluxo de refresh feito o do RD CRM.
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    meta_access_token: str = ""
+    meta_ad_account_id: str = ""
+    meta_api_version: str = "v21.0"
+
     # App
     env: str = "development"
     log_level: str = "INFO"
@@ -51,5 +61,24 @@ def require_rd_credentials() -> None:
     if faltando:
         raise RuntimeError(
             "Credenciais do RD CRM ausentes: " + ", ".join(faltando)
+            + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
+        )
+
+
+def require_meta_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para a Marketing API do Meta."""
+    faltando = [
+        nome
+        for nome, valor in (
+            ("META_APP_ID", settings.meta_app_id),
+            ("META_APP_SECRET", settings.meta_app_secret),
+            ("META_ACCESS_TOKEN", settings.meta_access_token),
+            ("META_AD_ACCOUNT_ID", settings.meta_ad_account_id),
+        )
+        if not valor
+    ]
+    if faltando:
+        raise RuntimeError(
+            "Credenciais do Meta Ads ausentes: " + ", ".join(faltando)
             + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
         )

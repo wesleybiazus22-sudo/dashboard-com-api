@@ -371,6 +371,108 @@ class MvCampaignCompany(Base):
     campaign: Mapped["MvCampaign"] = relationship(back_populates="companies")
 
 
+# ======================================================================
+# META ADS (Marketing API) -- performance de campanhas de trafego pago
+# ======================================================================
+
+
+class MetaCampaign(Base):
+    """Campanha do Meta Ads (Facebook/Instagram). `meta_id` e o id nativo do Meta,
+    equivalente ao `rd_id` das entidades do RD -- chave natural usada no upsert."""
+
+    __tablename__ = "meta_campaigns"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    meta_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    objective: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    effective_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    daily_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    lifetime_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stop_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class MetaAdSet(Base):
+    """Conjunto de anuncios (nivel de segmentacao/publico dentro de uma campanha)."""
+
+    __tablename__ = "meta_adsets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    meta_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    campaign_meta_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    effective_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    daily_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    lifetime_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class MetaAd(Base):
+    """Anuncio individual (nivel de criativo)."""
+
+    __tablename__ = "meta_ads"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    meta_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    adset_meta_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    campaign_meta_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    effective_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    creative_thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class MetaInsightDaily(Base):
+    """Uma linha por (anuncio, dia) -- metrica de performance vinda do endpoint
+    /insights com level=ad e time_increment=1. Consultar no nivel de anuncio (em vez
+    de fazer 3 chamadas separadas por campanha/conjunto/anuncio) porque a resposta ja
+    vem com campaign_id/adset_id/ad_id juntos na mesma linha, permitindo agregar pra
+    qualquer nivel a partir de uma unica sincronizacao.
+
+    Chave natural = (ad_meta_id, date) -- upsert por composicao, nao por id unico
+    (ver `upsert_insight_row` em ingestion/meta_ads/entities.py).
+    """
+
+    __tablename__ = "meta_insights_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+
+    campaign_meta_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    campaign_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    adset_meta_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    adset_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    ad_meta_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    ad_name: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    spend: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frequency: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    ctr: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    cpc: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    cpm: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+
+    # Bruto de proposito: o Meta tem dezenas de action_type (link_click, lead,
+    # purchase, add_to_cart, ...) e a taxonomia varia por objetivo de campanha. Guardar
+    # a lista crua permite as views extrairem o que interessa (ex: "lead") sem que o
+    # ingestor precise conhecer de antemao todo tipo de acao possivel.
+    actions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    cost_per_action_type: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 __all__ = [
     "OAuthToken",
     "SyncState",
@@ -391,4 +493,8 @@ __all__ = [
     "CrmMeeting",
     "MvCampaign",
     "MvCampaignCompany",
+    "MetaCampaign",
+    "MetaAdSet",
+    "MetaAd",
+    "MetaInsightDaily",
 ]

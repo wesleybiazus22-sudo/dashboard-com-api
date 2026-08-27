@@ -222,11 +222,76 @@ Depois desses passos você tem, no Postgres:
 - `crm_organizations`, `crm_contacts`, `crm_users`, `crm_tasks`, `crm_meetings`,
   `crm_pipelines`, `crm_stages`, `crm_lost_reasons` como dimensões de apoio
 
+## 12. Meta Ads (Marketing API)
+
+Sincroniza campanha, conjunto de anúncios, anúncio e performance diária (gasto,
+impressões, cliques, CTR, CPC, CPM, ações) da conta de anúncios do Meta
+(Facebook/Instagram). Roda junto com o resto no mesmo `python -m ingestion.sync_all`
+e no mesmo workflow do GitHub Actions — não precisa de agendador separado.
+
+### 12.1 Criar o app e gerar um token que não expira
+
+Diferente do RD CRM, aqui a automação **não usa** o fluxo de OAuth de usuário comum
+(token expira em 60 dias, exigiria renovação manual). Use um **Usuário do Sistema**,
+que pode gerar um token com expiração "Nunca":
+
+1. [developers.facebook.com/apps](https://developers.facebook.com/apps) → **Criar
+   app** → tipo **Empresa** → associe ao Business Manager da conta de anúncios.
+2. **Adicionar produtos** → **Marketing API**.
+3. Em **Configurações → Básico**, anote `App ID` e `Chave secreta do app`.
+4. [business.facebook.com/settings](https://business.facebook.com/settings) →
+   **Usuários do sistema** → criar um → em **Ativos atribuídos**, vincule a conta de
+   anúncios (visualização é suficiente).
+5. No usuário do sistema → **Gerar novo token** → selecione o app do passo 1 →
+   permissão `ads_read` → expiração **Nunca**.
+6. Anote o ID da conta de anúncios no formato `act_XXXXXXXXXXX` (Gerenciador de
+   Anúncios).
+
+### 12.2 Configurar
+
+Adicione ao `.env` (local) e aos mesmos lugares onde já estão `DATABASE_URL`/
+`RD_CRM_*` (GitHub Secrets para o sync automático; não precisa no Streamlit Cloud,
+que só lê o banco):
+
+```
+META_APP_ID=...
+META_APP_SECRET=...
+META_ACCESS_TOKEN=...          # token do usuario do sistema, "Nunca" expira
+META_AD_ACCOUNT_ID=act_...
+```
+
+Sem essas variáveis, o sync **pula** a etapa do Meta Ads silenciosamente (não
+quebra o resto) — é seguro fazer merge/deploy deste código antes de ter as
+credenciais em mãos.
+
+### 12.3 Rodar a carga inicial
+
+```bash
+python -m ingestion.sync_all full
+python -m scripts.init_db   # cria as tabelas meta_* se ainda nao existirem
+```
+
+A partir daí, a sincronização incremental já cuida da atualização — inclusive
+re-buscando os últimos 8 dias a cada rodada, porque o Meta revisa métricas de
+conversão por alguns dias após o fato (ver comentário em
+`ingestion/meta_ads/sync.py`).
+
+### 12.4 Limitação atual: sem cruzamento com o funil do CRM
+
+`database/views_meta_ads.sql` traz a performance do Meta isolada (por campanha,
+conjunto, anúncio e dia). Cruzar isso com o funil do RD CRM (custo por reunião
+realizada, por etapa) exige que a negociação carregue a UTM/campanha de origem —
+hoje `crm_deals.custom_fields` está vazio em todas as negociações, então esse
+vínculo não existe ainda. Isso se resolve configurando o RD Station Marketing para
+copiar a UTM/origem da conversão para o campo customizado da negociação; assim que
+esse dado começar a chegar, o cruzamento entra como nova view.
+
 ## Próximos passos (fora do escopo desta primeira entrega)
 
 - Views/materialized views em SQL para as métricas de SDR, Closer e Pipeline
   (aging, win rate, show rate, pipeline movement)
 - Dashboard em Streamlit consumindo essas views (não a API do RD diretamente)
-- Fase 2: RD Station Marketing, GA4, Meta/Google/LinkedIn Ads, attribution
+- Fase 2: RD Station Marketing, GA4, Google/LinkedIn Ads, attribution completo
+  (Meta Ads já entrou — ver seção 12)
 - Deploy da API (Render/Railway/Fly.io/AWS) com HTTPS definitivo e o agendador
   de sincronização incremental

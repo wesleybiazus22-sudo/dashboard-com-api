@@ -48,4 +48,13 @@ jobs:
           RD_CRM_CLIENT_ID: ${{ secrets.RD_CRM_CLIENT_ID }}
           RD_CRM_CLIENT_SECRET: ${{ secrets.RD_CRM_CLIENT_SECRET }}
           RD_CRM_REDIRECT_URI: ${{ secrets.RD_CRM_REDIRECT_URI }}
+          # Meta Ads -- secrets que ainda nao existem no repositorio resolvem pra
+          # string vazia (o GitHub nao falha por secret inexistente), e o proprio
+          # sync detecta META_ACCESS_TOKEN vazio e pula essa etapa sem erro. Passam
+          # a fazer efeito automaticamente assim que forem cadastrados em Settings
+          # > Secrets and variables > Actions, sem precisar editar este arquivo.
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          META_AD_ACCOUNT_ID: ${{ secrets.META_AD_ACCOUNT_ID }}
         run: python -m ingestion.sync_all incremental
