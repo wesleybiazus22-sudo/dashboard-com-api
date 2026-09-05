@@ -121,6 +121,27 @@ DEAL_STATUS_COLORS = {
 }
 DEAL_STATUS_LABELS = {"ongoing": "Em andamento", "won": "Ganha", "lost": "Perdida"}
 
+# Objetivo de campanha do Meta Ads -- os valores brutos vem em ingles/caixa alta
+# (formato interno da API), sem tradução amigavel pro dashboard.
+META_OBJECTIVE_LABELS = {
+    "OUTCOME_LEADS": "Geração de leads",
+    "OUTCOME_ENGAGEMENT": "Engajamento",
+    "OUTCOME_TRAFFIC": "Tráfego",
+    "OUTCOME_AWARENESS": "Reconhecimento",
+    "OUTCOME_SALES": "Vendas",
+    "OUTCOME_APP_PROMOTION": "Promoção de app",
+}
+
+META_STATUS_COLORS = {
+    "ACTIVE": STATUS_GOOD,
+    "PAUSED": STATUS_NEUTRAL,
+    "ARCHIVED": BRAND_INK_200,
+    "DELETED": BRAND_INK_200,
+}
+META_STATUS_LABELS = {
+    "ACTIVE": "Ativa", "PAUSED": "Pausada", "ARCHIVED": "Arquivada", "DELETED": "Excluída",
+}
+
 UF_NOMES = {
     "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia",
     "CE": "Ceará", "DF": "Distrito Federal", "ES": "Espírito Santo", "GO": "Goiás",
@@ -159,6 +180,26 @@ def format_pct(v, casas: int = 1) -> str:
     if v is None or v != v:
         return "—"
     return f"{v:.{casas}f}%".replace(".", ",")
+
+
+def format_money(v, moeda: str = "R$") -> str:
+    """Valor monetario no padrao BR: milhar com ponto, decimal com virgula."""
+    if v is None or v != v:
+        return "—"
+    inteiro, _, centavos = f"{float(v):,.2f}".partition(".")
+    inteiro = inteiro.replace(",", ".")
+    return f"{moeda} {inteiro},{centavos}"
+
+
+def format_days(hours, casas: int = 1) -> str:
+    """Converte horas em dias (1 casa decimal por padrao, virgula BR). Usado nas
+    metricas de velocidade -- pedido do usuario pra nao misturar "5d 6h" (formato
+    adaptativo de `format_duration`) com um numero direto de dias, mais facil de
+    comparar de uma etapa pra outra."""
+    if hours is None or hours != hours:
+        return "—"
+    dias = hours / 24
+    return f"{dias:.{casas}f} dias".replace(".", ",")
 
 
 def format_duration(hours: float | None) -> str:

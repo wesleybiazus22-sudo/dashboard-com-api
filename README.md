@@ -286,6 +286,130 @@ vínculo não existe ainda. Isso se resolve configurando o RD Station Marketing 
 copiar a UTM/origem da conversão para o campo customizado da negociação; assim que
 esse dado começar a chegar, o cruzamento entra como nova view.
 
+## 13. Google Analytics 4 (Data API)
+
+Sincroniza 5 relatórios agregados do GA4: visão geral diária (sessões, usuários,
+engajamento, eventos-chave), origem de tráfego (canal/origem/mídia), páginas mais
+visitadas, dispositivo/navegador e geografia (país/cidade). Roda junto com o resto
+no mesmo `python -m ingestion.sync_all` e no mesmo workflow do GitHub Actions.
+
+Diferente do RD CRM e do Meta Ads, o GA4 não expõe entidades com id próprio — cada
+relatório já vem agregado por uma combinação de dimensões (ver
+`ingestion/ga4/client.py`).
+
+### 13.1 Criar a conta de serviço
+
+Autenticação via **conta de serviço** (Service Account), não OAuth — sem token de
+curta duração pra renovar: uma vez concedido o acesso, a chave vale indefinidamente.
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → crie/selecione um
+   projeto → **APIs e serviços → Biblioteca** → ative a **Google Analytics Data API**
+   (não confundir com a "Google Analytics API" antiga/Universal Analytics).
+2. **IAM e administrador → Contas de serviço → + Criar conta de serviço** → dê um
+   nome → pode pular as etapas de permissão do projeto (não são necessárias).
+3. Na conta de serviço criada → aba **Chaves → Adicionar chave → Criar nova chave**
+   → formato **JSON** → baixa o arquivo.
+4. Copie o **e-mail** da conta de serviço (formato
+   `nome@projeto.iam.gserviceaccount.com`).
+5. No [GA4](https://analytics.google.com) → **Administrador → Acesso à propriedade**
+   → **+ Adicionar usuários** → cole o e-mail → papel **Visualizador**.
+6. Ainda em Administrador → **Detalhes da propriedade**, anote o **ID da
+   propriedade** (numérico).
+
+### 13.2 Configurar
+
+Adicione ao `.env` (local) e aos mesmos lugares onde já estão `DATABASE_URL`/
+`RD_CRM_*`/`META_*` (GitHub Secrets para o sync automático; não precisa no
+Streamlit Cloud, que só lê o banco):
+
+```
+GA4_PROPERTY_ID=...
+GA4_SERVICE_ACCOUNT_JSON='{"type": "service_account", ...}'   # conteudo do JSON baixado, numa linha so
+```
+
+Sem essas variáveis, o sync **pula** a etapa do GA4 silenciosamente (não quebra o
+resto) — é seguro fazer merge/deploy deste código antes de ter as credenciais em
+mãos.
+
+### 13.3 Rodar a carga inicial
+
+```bash
+python -m scripts.init_db   # cria as tabelas ga4_* se ainda nao existirem
+python -m ingestion.sync_all full
+```
+
+A partir daí, a sincronização incremental já cuida da atualização — inclusive
+re-buscando os últimos 8 dias a cada rodada, porque o GA4 também revisa métricas
+por causa de processamento assíncrono (ver comentário em `ingestion/ga4/sync.py`).
+
+### 13.4 Limitação atual: sem cruzamento com o funil do CRM
+
+`ga4_*` traz o comportamento de tráfego isolado (por dia, origem, página,
+dispositivo, geografia). Cruzar isso com o funil do RD CRM (ex: quantas reuniões
+vieram de qual página/origem) exige que a negociação carregue o Client ID ou a
+UTM de origem do GA4 — hoje esse vínculo não existe ainda.
+
+## 14. Meta Conversions API (CAPI) — avanço no funil de volta pro Meta
+
+Fecha o loop inverso do que as seções 12/13 fazem: em vez de trazer dado do Meta
+pra cá, **envia** um evento pro Meta quando uma negociação do RD CRM alcança uma
+etapa avançada (por padrão, "Reunião Agendada" no funil de Qualificação) —
+permitindo otimizar campanhas e criar públicos semelhantes baseados em quem
+realmente avançou no funil, não só em quem clicou/preencheu formulário.
+
+Diferente das seções anteriores, isso reage a **webhooks** do RD CRM em tempo
+real (`webhooks/processor.py`), não a uma sincronização periódica.
+
+### 14.1 Como funciona
+
+1. O RD Marketing captura o `fbclid` (Click ID do anúncio) no formulário de conversão.
+2. Você configura o RD Station pra copiar esse valor pra um **campo personalizado**
+   na negociação quando ela é criada (passo feito dentro do RD, fora deste
+   repositório — sem isso, `crm_deals.fbclid` fica `NULL` e o evento nunca dispara).
+3. Nosso sync já grava esse campo (`ingestion/rd_crm/deals.py::_extract_fbclid`,
+   tolerante a variações de nome do campo).
+4. Quando um webhook `crm_deal_updated` mostra a negociação entrando na etapa-
+   gatilho, `webhooks/processor.py` chama `ingestion/meta_ads/capi.py` e envia o
+   evento pro Meta, casado pelo `fbclid` (+ email/telefone do contato, se
+   disponíveis, pra melhorar a correspondência).
+
+### 14.2 Gerar as credenciais
+
+No [Gerenciador de Eventos](https://business.facebook.com/events_manager2) do
+Meta → sua fonte de dados (Pixel) → **Configurações**:
+- **ID do Pixel**: aparece no topo da página.
+- **API de Conversões → Gerar token de acesso**: token de ESCRITA, diferente do
+  `META_ACCESS_TOKEN` usado nas seções 12/13 (aquele só lê campanha).
+
+### 14.3 Configurar
+
+```
+META_CAPI_PIXEL_ID=...
+META_CAPI_ACCESS_TOKEN=...
+META_CAPI_TRIGGER_STAGE_RD_ID=6a4febe620cf310024567a82   # Reuniao Agendada (Qualificacao)
+META_CAPI_EVENT_NAME=Reuniao_Agendada
+```
+
+Sem `META_CAPI_PIXEL_ID`/`META_CAPI_ACCESS_TOKEN`, o webhook processa a negociação
+normalmente e só **pula** o envio pro Meta (log, sem erro) — seguro fazer deploy
+antes de ter as credenciais em mãos. Da mesma forma, se `fbclid` estiver vazio
+numa negociação específica (a maioria, até o passo 2 acima estar configurado no
+RD), só pula aquela negociação.
+
+### 14.4 Limitações conhecidas
+
+- **Janela de atribuição**: o `event_time` enviado é o momento em que a negociação
+  entrou na etapa, que pode ser dias/semanas depois do clique original. O evento é
+  registrado e pode ser usado pra públicos semelhantes/otimização, mas pode cair
+  fora da janela de atribuição padrão (1/7/28 dias) nos relatórios do próprio
+  Gerenciador de Anúncios.
+- **Correspondência do `fbc`**: montamos o parâmetro `fbc` sem o timestamp real do
+  clique (não guardamos esse instante hoje) — o Meta ainda casa pelo valor do
+  `fbclid` em si, mas a qualidade de correspondência pode ficar levemente abaixo
+  do ideal.
+- **Trocar a etapa-gatilho**: descubra o `rd_id` da etapa desejada com uma consulta
+  em `crm_stages` (join com `crm_pipelines`) e atualize `META_CAPI_TRIGGER_STAGE_RD_ID`.
+
 ## Próximos passos (fora do escopo desta primeira entrega)
 
 - Views/materialized views em SQL para as métricas de SDR, Closer e Pipeline

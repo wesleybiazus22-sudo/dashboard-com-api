@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     meta_ad_account_id: str = ""
     meta_api_version: str = "v21.0"
 
+    # Google Analytics 4 (Data API). Autenticacao via CONTA DE SERVICO, nao OAuth --
+    # ao contrario do Meta, nao ha token de curta duracao pra renovar: uma vez que a
+    # conta de servico e adicionada como Visualizador na propriedade GA4, a chave
+    # continua valida indefinidamente (ate ser revogada manualmente).
+    ga4_property_id: str = ""
+    ga4_service_account_json: str = ""
+
+    # Meta Conversions API (CAPI) -- diferente do `meta_access_token` acima (que so
+    # LE dados de campanha), isso ENVIA eventos de conversao pro Pixel, exige um
+    # token com permissao de escrita gerado especificamente pra isso no Gerenciador
+    # de Eventos (Events Manager > Fonte de dados > Configuracoes > API de
+    # Conversoes > Gerar token de acesso) -- nao reaproveita o token do Marketing API.
+    meta_capi_pixel_id: str = ""
+    meta_capi_access_token: str = ""
+
+    # RD CRM: pipeline/etapa que, ao ser alcancada por uma negociacao, dispara o
+    # evento de conversao pro Meta (ver webhooks/processor.py). IDs (nao nomes) pra
+    # nao quebrar se a etapa for renomeada no RD -- ver `python -m scripts...`
+    # pra descobrir o rd_id de uma etapa/pipeline (crm_pipelines/crm_stages).
+    meta_capi_trigger_stage_rd_id: str = "6a4febe620cf310024567a82"  # Reuniao Agendada (Qualificacao)
+    meta_capi_event_name: str = "Reuniao_Agendada"
+
     # App
     env: str = "development"
     log_level: str = "INFO"
@@ -80,5 +102,39 @@ def require_meta_credentials() -> None:
     if faltando:
         raise RuntimeError(
             "Credenciais do Meta Ads ausentes: " + ", ".join(faltando)
+            + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
+        )
+
+
+def require_ga4_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para a GA4 Data API."""
+    faltando = [
+        nome
+        for nome, valor in (
+            ("GA4_PROPERTY_ID", settings.ga4_property_id),
+            ("GA4_SERVICE_ACCOUNT_JSON", settings.ga4_service_account_json),
+        )
+        if not valor
+    ]
+    if faltando:
+        raise RuntimeError(
+            "Credenciais do GA4 ausentes: " + ", ".join(faltando)
+            + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
+        )
+
+
+def require_meta_capi_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para a Meta Conversions API."""
+    faltando = [
+        nome
+        for nome, valor in (
+            ("META_CAPI_PIXEL_ID", settings.meta_capi_pixel_id),
+            ("META_CAPI_ACCESS_TOKEN", settings.meta_capi_access_token),
+        )
+        if not valor
+    ]
+    if faltando:
+        raise RuntimeError(
+            "Credenciais da Meta Conversions API ausentes: " + ", ".join(faltando)
             + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
         )

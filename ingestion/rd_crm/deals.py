@@ -22,6 +22,33 @@ from ingestion.rd_crm.entities import parse_dt, upsert_by_rd_id
 ENDPOINT = "/deals"
 
 
+def _extract_fbclid(item: dict) -> str | None:
+    """Procura o fbclid dentro de `custom_fields`, tolerando os dois formatos que a
+    API do RD ja usou historicamente: dict {chave: valor} (chave pode ser o NOME do
+    campo ou o id interno do RD, ainda nao confirmado contra um payload real -- ver
+    docstring do modulo) ou lista de {custom_field_id/label, value}. Procura por
+    "fbclid" como SUBSTRING (case-insensitive) do nome/chave, entao funciona mesmo
+    se o campo personalizado for criado como "Fbclid", "fb_clid" etc.
+    Retorna None sem erro se o campo nao existir ainda (a maioria das negociacoes,
+    ate o campo ser configurado no RD -- ver README secao 14)."""
+    custom = item.get("custom_fields")
+    if not custom:
+        return None
+
+    if isinstance(custom, dict):
+        for chave, valor in custom.items():
+            if "fbclid" in str(chave).lower() and valor:
+                return str(valor)
+    elif isinstance(custom, list):
+        for campo in custom:
+            if not isinstance(campo, dict):
+                continue
+            rotulo = str(campo.get("custom_field_id") or campo.get("label") or campo.get("name") or "")
+            if "fbclid" in rotulo.lower() and campo.get("value"):
+                return str(campo["value"])
+    return None
+
+
 def extract_deal_fields(item: dict) -> dict:
     return {
         "name": item.get("name"),
@@ -35,6 +62,7 @@ def extract_deal_fields(item: dict) -> dict:
         "current_owner_rd_id": item.get("owner_id"),
         "campaign": item.get("campaign_id"),
         "source": item.get("source_id"),
+        "fbclid": _extract_fbclid(item),
         "lost_reason_rd_id": item.get("lost_reason_id"),
         "deal_created_at": parse_dt(item.get("created_at")),
         "deal_updated_at": parse_dt(item.get("updated_at")),

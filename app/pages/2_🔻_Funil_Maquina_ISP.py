@@ -18,6 +18,7 @@ from app.theme import (
     STATUS_CRITICAL,
     STATUS_GOOD,
     base_layout,
+    format_days,
     format_duration,
     format_int,
     format_pct,
@@ -107,6 +108,13 @@ st.caption(
 total = len(deals)
 sdr_ganhos = int(deals["sdr_ganhou"].sum())
 closer_ganhos = int(deals["closer_ganhou"].sum())
+# Quantas ESTAO em Freemium agora, vs quantas ja CHEGARAM la em algum momento --
+# sao numeros diferentes de proposito (ver "closer_ganhou" em
+# v_maquina_isp_deal_milestones): uma negociacao que chegou em Freemium e depois
+# foi movida pra "Desistiu" continua contando como conquista do closer (o
+# trabalho dele foi feito), mas nao esta mais ativa em Freemium hoje. Mostrar so
+# o numero cumulativo sem essa distincao lia como se todas ainda estivessem la.
+freemium_ativos = int((deals["stage_name"] == "Freemium").sum())
 perdidas = int((deals["deal_status"] == "lost").sum())
 andamento = int((deals["deal_status"] == "ongoing").sum())
 mediana_dias = deals["dias_no_funil"].median()
@@ -120,9 +128,15 @@ k3.metric(
     help="Entrega da SDR: a negociação alcançou 'Reunião Realizada' ou além, independente do desfecho final.",
 )
 k4.metric(
-    "Freemium", format_int(closer_ganhos),
-    f"{format_pct(100 * closer_ganhos / total)} do total",
-    help="Fechamento de verdade deste produto: a negociação alcançou a etapa Freemium.",
+    "Freemium (ativos agora)", format_int(freemium_ativos),
+    f"{format_int(closer_ganhos)} chegaram lá ao todo",
+    help=(
+        "Negociações que estão NA ETAPA Freemium neste exato momento. "
+        f"No total, {format_int(closer_ganhos)} já chegaram a Freemium alguma vez -- "
+        "esse número maior inclui as que saíram depois (ex: para 'Desistiu') e "
+        "continua contando como fechamento de verdade do closer, mesmo que a "
+        "negociação não esteja mais ativa lá hoje."
+    ),
 )
 k5.metric("Perdidas", format_int(perdidas), f"{format_pct(100 * perdidas / total)} do total", delta_color="inverse")
 k6.metric("Tempo mediano no funil", format_duration((mediana_dias or 0) * 24))
@@ -249,7 +263,10 @@ v1, v2 = st.columns(2)
 
 with v1:
     st.markdown("**Tempo parado em cada etapa**")
-    st.caption("Quanto tempo a negociação fica dentro da etapa.")
+    st.caption(
+        "Concluídas = já saíram da etapa (referência histórica). Paradas agora = "
+        "ainda estão lá, contando até hoje -- é aqui que um gargalo atual aparece."
+    )
     aging = query(
         "select deal_id, stage_name, stage_order, duration_hours, exited_at "
         "from v_deal_stage_aging where product_group = 'Máquina ISP'"
@@ -258,23 +275,72 @@ with v1:
     if aging.empty:
         st.caption("Sem dados de permanência no recorte atual.")
     else:
-        ag = (
-            aging.groupby(["stage_name", "stage_order"])["duration_hours"]
+        # Misturar concluidas (exited_at preenchido) com paradas agora (exited_at
+        # nulo, contando ate hoje) numa mediana so ESCONDE gargalo atual: mediana e
+        # resistente a outlier por definicao, entao uma unica negociacao presa ha
+        # semanas nao move a mediana nem um pouco -- e exatamente o caso que
+        # importa mostrar. Por isso os dois grupos vem SEPARADOS, com o pior caso
+        # (maximo) das paradas agora explicito, em vez de escondido atras da mediana.
+        concluidas = aging[aging["exited_at"].notna()]
+        paradas = aging[aging["exited_at"].isna()]
+
+        # Trabalha em DIAS uteis daqui pra frente (nao horas) -- pedido do usuario,
+        # pra nao misturar formato adaptativo "5d 6h" com um numero direto e facil
+        # de comparar de etapa pra etapa. Converte assim que sai do agrupamento,
+        # entao eixo, texto e hover ficam todos na mesma unidade sem conversao
+        # espalhada pelo resto do codigo.
+        ag_concluidas = (
+            concluidas.groupby(["stage_name", "stage_order"])["duration_hours"]
             .agg(passagens="count", mediana="median").reset_index()
-            .sort_values("stage_order", ascending=False)
         )
-        fig = go.Figure(go.Bar(
-            y=ag["stage_name"], x=ag["mediana"], orientation="h",
-            marker=dict(color=BRAND_BLUE_600),
-            text=[f"  {format_duration(h)}" for h in ag["mediana"]],
-            textposition="outside", cliponaxis=False,
-            customdata=ag[["passagens"]].values,
-            hovertemplate="<b>%{y}</b><br>mediana: %{x:.0f}h<br>%{customdata[0]} passagens<extra></extra>",
-        ))
-        fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, ag["mediana"].max() * 1.4])
-        base_layout(fig, height=330)
-        fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=20, b=10))
+        ag_concluidas["mediana_dias"] = ag_concluidas["mediana"] / 24
+        ag_paradas = (
+            paradas.groupby(["stage_name", "stage_order"])["duration_hours"]
+            .agg(paradas="count", mediana="median", maximo="max").reset_index()
+        )
+        ag_paradas["mediana_dias"] = ag_paradas["mediana"] / 24
+        ag_paradas["maximo_dias"] = ag_paradas["maximo"] / 24
+        ordem_etapas = (
+            aging[["stage_name", "stage_order"]].drop_duplicates()
+            .sort_values("stage_order", ascending=False)["stage_name"].tolist()
+        )
+
+        fig = go.Figure()
+        if not ag_concluidas.empty:
+            base_c = ag_concluidas.set_index("stage_name").reindex(ordem_etapas).reset_index()
+            fig.add_trace(go.Bar(
+                name="Concluídas (mediana)", y=base_c["stage_name"], x=base_c["mediana_dias"],
+                orientation="h", marker=dict(color=BRAND_BLUE_600),
+                text=[format_days(h) for h in base_c["mediana"]],
+                textposition="outside", cliponaxis=False,
+                customdata=base_c[["passagens"]].values,
+                hovertemplate="<b>%{y}</b><br>mediana (concluídas): %{x:.1f} dias<br>%{customdata[0]} passagens<extra></extra>",
+            ))
+        if not ag_paradas.empty:
+            base_p = ag_paradas.set_index("stage_name").reindex(ordem_etapas).reset_index()
+            fig.add_trace(go.Bar(
+                name="Paradas agora (mediana)", y=base_p["stage_name"], x=base_p["mediana_dias"],
+                orientation="h", marker=dict(color=STATUS_CRITICAL),
+                text=[format_days(h) for h in base_p["mediana"]],
+                textposition="outside", cliponaxis=False,
+                customdata=base_p[["paradas", "maximo_dias"]].values,
+                hovertemplate="<b>%{y}</b><br>mediana (paradas agora): %{x:.1f} dias<br>"
+                "%{customdata[0]} paradas agora · pior caso: %{customdata[1]:.1f} dias<extra></extra>",
+            ))
+        fig.update_layout(barmode="group")
+        fig.update_xaxes(showgrid=False, title_text="Dias úteis")
+        base_layout(fig, height=340)
+        fig.update_layout(margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True, key=f"{PAGE}_aging")
+
+        # leitura automatica do pior caso -- a negociacao presa ha mais tempo AGORA,
+        # em qualquer etapa, e o dado que a mediana sozinha nunca mostraria.
+        if not ag_paradas.empty:
+            pior = ag_paradas.loc[ag_paradas["maximo"].idxmax()]
+            st.caption(
+                f"⚠️ Pior caso agora: uma negociação parada há **{format_days(pior['maximo'])}** "
+                f"em **{pior['stage_name']}**."
+            )
 
 with v2:
     st.markdown("**Tempo de movimentação entre etapas**")
@@ -293,15 +359,16 @@ with v2:
             .agg(transicoes="count", mediana="median").reset_index()
             .sort_values(["de_ordem", "movimento"], ascending=[False, True])
         )
+        tr["mediana_dias"] = tr["mediana"] / 24  # ver comentario no grafico de aging acima
         fig = go.Figure(go.Bar(
-            y=tr["movimento"], x=tr["mediana"], orientation="h",
+            y=tr["movimento"], x=tr["mediana_dias"], orientation="h",
             marker=dict(color=CAT_ORANGE),
-            text=[f"  {format_duration(h)}" for h in tr["mediana"]],
+            text=[f"  {format_days(h)}" for h in tr["mediana"]],
             textposition="outside", cliponaxis=False,
             customdata=tr[["transicoes"]].values,
-            hovertemplate="<b>%{y}</b><br>mediana: %{x:.0f}h<br>%{customdata[0]} movimentações<extra></extra>",
+            hovertemplate="<b>%{y}</b><br>mediana: %{x:.1f} dias<br>%{customdata[0]} movimentações<extra></extra>",
         ))
-        fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, tr["mediana"].max() * 1.4])
+        fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, tr["mediana_dias"].max() * 1.4])
         base_layout(fig, height=330)
         fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True, key=f"{PAGE}_transicoes")

@@ -216,6 +216,14 @@ class CrmDeal(Base):
     campaign: Mapped[str | None] = mapped_column(String, nullable=True)
     source: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Click ID do Meta capturado no RD Marketing e copiado pro card da negociacao
+    # via campo personalizado (ver README secao 14) -- fecha o loop entre o clique
+    # no anuncio e o avanco no funil de vendas (ver ingestion/meta_ads/capi.py e o
+    # gatilho em webhooks/processor.py). NULL pra maioria das negociacoes: so
+    # existe quando (a) o lead veio de um clique em anuncio do Meta E (b) o campo
+    # personalizado ja estava configurado no RD quando a negociacao foi criada.
+    fbclid: Mapped[str | None] = mapped_column(String, nullable=True)
+
     lost_reason_rd_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     deal_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -466,10 +474,157 @@ class MetaInsightDaily(Base):
     # purchase, add_to_cart, ...) e a taxonomia varia por objetivo de campanha. Guardar
     # a lista crua permite as views extrairem o que interessa (ex: "lead") sem que o
     # ingestor precise conhecer de antemao todo tipo de acao possivel.
-    actions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    cost_per_action_type: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null=True: sem isso, atribuir Python None a uma coluna JSON(B) grava o
+    # LITERAL JSON `null` (um valor jsonb valido) em vez de NULL de banco -- e
+    # `jsonb_array_elements` quebra com "cannot extract elements from a scalar" ao
+    # tentar iterar sobre esse `null` (ver comentario na view v_meta_insights_enriched,
+    # que tambem se defende disso pros dados ja gravados antes desta correcao).
+    actions: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    cost_per_action_type: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+
+    # Engajamento de video -- campos NOMEADOS da API (nao entram no array generico
+    # `actions`, precisam ser pedidos explicitamente no `fields` do /insights). NULL
+    # de verdade (nao 0) quando o anuncio nao e de video -- 0 significa "e video, mas
+    # ninguem chegou nesse marco". Ja vem somados em `parse_action_sum` na ingestao
+    # (ver ingestion/meta_ads/entities.py) em vez de guardados como JSONB bruto: ao
+    # contrario de `actions`, sao so 2 metricas fixas e conhecidas, sem taxonomia
+    # variavel -- nao ha ganho em manter o JSON cru.
+    video_thruplay: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_view_50: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+# ======================================================================
+# GOOGLE ANALYTICS 4 (Data API) -- comportamento de trafego no site
+# ======================================================================
+#
+# Ao contrario do RD/Meta, o GA4 nao expoe entidades com id proprio: cada
+# relatorio ja vem agregado por uma combinacao de dimensoes (ver
+# ingestion/ga4/client.py). Por isso cada tabela abaixo tem uma chave natural
+# COMPOSTA diferente (sempre incluindo `date`), sem equivalente a `meta_id`/`rd_id`
+# -- upsert generico em `upsert_by_composite` (ingestion/ga4/entities.py).
+
+
+class Ga4DailyOverview(Base):
+    """Uma linha por dia: metricas-resumo do site inteiro (visao geral)."""
+
+    __tablename__ = "ga4_daily_overview"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, unique=True, nullable=False, index=True)
+
+    sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engaged_sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engagement_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    avg_session_duration: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)  # segundos
+    bounce_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    screen_page_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    key_events: Mapped[int | None] = mapped_column(Integer, nullable=True)  # "conversoes" no nome antigo da UI
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Ga4TrafficSourceDaily(Base):
+    """Uma linha por (dia, canal, origem, midia) -- de onde vem o trafego
+    (organico, pago, social, direto, referencia, ...)."""
+
+    __tablename__ = "ga4_traffic_source_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    channel_group: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    medium: Mapped[str] = mapped_column(String, nullable=False)
+
+    sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engaged_sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    key_events: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Ga4UtmCampaignDaily(Base):
+    """Uma linha por (dia, canal, origem, midia, utm_campaign, utm_content) --
+    quebra o trafego pelas TAGS DE UTM que a propria operacao coloca nos links dos
+    anuncios (`utm_campaign`/`utm_content`), em vez de so pela deteccao automatica
+    do GA4 (`channel_group`/`source`/`medium`, que existe em Ga4TrafficSourceDaily).
+    Como a mesma pessoa controla o nome da UTM, essa quebra fica mais precisa que a
+    automatica pra casar trafego com o nome exato da campanha usado no Meta Ads.
+
+    `utm_campaign`/`utm_content` vem das dimensoes `sessionManualCampaignName`/
+    `sessionManualAdContent` do GA4 -- "manual" no nome delas significa "populado
+    por UTM explicita na URL", diferente de `sessionCampaignName` (que tambem
+    preenche via auto-tagging do Google Ads, sem UTM nenhuma)."""
+
+    __tablename__ = "ga4_utm_campaign_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    channel_group: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    medium: Mapped[str] = mapped_column(String, nullable=False)
+    utm_campaign: Mapped[str] = mapped_column(Text, nullable=False)
+    utm_content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engaged_sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    key_events: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Ga4PageDaily(Base):
+    """Uma linha por (dia, pagina) -- quais paginas do site recebem mais trafego."""
+
+    __tablename__ = "ga4_page_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    page_path: Mapped[str] = mapped_column(Text, nullable=False)
+    page_title: Mapped[str] = mapped_column(Text, nullable=False)
+
+    screen_page_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Ga4DeviceDaily(Base):
+    """Uma linha por (dia, categoria de dispositivo, navegador)."""
+
+    __tablename__ = "ga4_device_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    device_category: Mapped[str] = mapped_column(String, nullable=False)  # desktop / mobile / tablet
+    browser: Mapped[str] = mapped_column(String, nullable=False)
+
+    sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Ga4GeoDaily(Base):
+    """Uma linha por (dia, pais, cidade) -- de onde geograficamente vem o trafego."""
+
+    __tablename__ = "ga4_geo_daily"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String, nullable=False)
+    city: Mapped[str] = mapped_column(String, nullable=False)
+
+    sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -497,4 +652,10 @@ __all__ = [
     "MetaAdSet",
     "MetaAd",
     "MetaInsightDaily",
+    "Ga4DailyOverview",
+    "Ga4TrafficSourceDaily",
+    "Ga4UtmCampaignDaily",
+    "Ga4PageDaily",
+    "Ga4DeviceDaily",
+    "Ga4GeoDaily",
 ]

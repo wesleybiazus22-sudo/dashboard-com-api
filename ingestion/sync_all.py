@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from config.settings import settings
 from database.connection import session_scope
 from database.models import SyncState
+from ingestion.ga4 import sync as ga4_sync
 from ingestion.meta_ads import sync as meta_sync
 from ingestion.rd_crm import contacts as contacts_sync
 from ingestion.rd_crm import deals as deals_sync
@@ -83,6 +84,21 @@ def _sync_meta_ads(full: bool) -> bool:
     return ok
 
 
+def _sync_ga4(full: bool) -> bool:
+    """Sincroniza GA4 se as credenciais estiverem configuradas. Mesmo criterio de
+    `_sync_meta_ads`: True tanto quando da certo QUANTO quando esta simplesmente
+    desligado (sem credenciais) -- so False quando esta configurado e falhou."""
+    if not settings.ga4_property_id or not settings.ga4_service_account_json:
+        print("  ga4: pulado (GA4_PROPERTY_ID/GA4_SERVICE_ACCOUNT_JSON nao configurados)")
+        return True
+
+    ok = True
+    with session_scope() as db:
+        label = "ga4: relatorios (historico completo)" if full else "ga4: relatorios (ultimos dias)"
+        ok &= _run_step(db, label, lambda: ga4_sync.sync_all_reports(db, full=full))
+    return ok
+
+
 def run_full_sync() -> set[str]:
     ok_entities: set[str] = set()
 
@@ -115,10 +131,13 @@ def run_full_sync() -> set[str]:
             _set_last_synced_at(db, entity, now)
 
     meta_ok = _sync_meta_ads(full=True)
+    ga4_ok = _sync_ga4(full=True)
 
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
     if not meta_ok:
         faltando.add("meta_ads")
+    if not ga4_ok:
+        faltando.add("ga4")
     if faltando:
         print(f"Carga inicial concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:
@@ -177,10 +196,13 @@ def run_incremental_sync() -> set[str]:
             _set_last_synced_at(db, entity, now)
 
     meta_ok = _sync_meta_ads(full=False)
+    ga4_ok = _sync_ga4(full=False)
 
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
     if not meta_ok:
         faltando.add("meta_ads")
+    if not ga4_ok:
+        faltando.add("ga4")
     if faltando:
         print(f"Sincronizacao incremental concluida com pendencias em: {', '.join(sorted(faltando))}.")
     else:

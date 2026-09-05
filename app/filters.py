@@ -20,6 +20,7 @@ PRESETS = [
     "Últimos 90 dias",
     "Este mês",
     "Mês passado",
+    "Desde agosto",
     "Personalizado",
 ]
 
@@ -54,6 +55,14 @@ def intervalo_do_preset(preset: str, minimo: date, maximo: date) -> tuple[date, 
         primeiro = hoje.replace(day=1)
         fim = primeiro - timedelta(days=1)
         ini = fim.replace(day=1)
+    elif preset == "Desde agosto":
+        # Agosto do ano corrente -- se hoje ainda nao chegou em agosto (ex: em
+        # marco), usa o agosto do ano anterior, senao o preset ficaria "no futuro"
+        # e devolveria um periodo vazio.
+        ini = date(hoje.year, 8, 1)
+        if ini > hoje:
+            ini = date(hoje.year - 1, 8, 1)
+        fim = hoje
     else:  # "Tudo"
         return minimo, maximo
 

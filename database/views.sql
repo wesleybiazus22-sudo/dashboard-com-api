@@ -81,6 +81,43 @@ group by product_group, canonical_stage;
 -- em que foi perdida (d.closed_at = a "data de evolucao" pedida), em vez de continuar
 -- contando tempo ate agora na etapa original. Isso e só uma reclassificacao de
 -- RELATORIO -- nao mexe no card real do RD nem no historico bruto (crm_deal_stage_history).
+-- Horas UTEIS entre dois instantes -- desconta sabado e domingo INTEIROS do
+-- periodo, em vez do tempo corrido cru. Pedido do usuario: a metrica de
+-- velocidade nao deve fazer uma negociacao parecer mais lenta so porque o
+-- intervalo cruzou um fim de semana (ninguem trabalha nela nesses dias).
+--
+-- Estrategia: passa por cada DIA (meia-noite a meia-noite, no fuso de Sao Paulo
+-- -- "sabado"/"domingo" tem que ser o fim de semana local, nao o dia em UTC, que
+-- pode cair no dia errado perto da virada) dentro do intervalo, soma so a fatia
+-- de cada dia que caiu dentro de [inicio, fim] E que nao e sabado/domingo. Um
+-- intervalo que comeca sexta 15h e termina segunda 10h conta so "sexta 15h-24h"
+-- + "segunda 00h-10h" = 19h -- as 48h do fim de semana nunca entram na soma.
+-- Retorna numeric de proposito: e o tipo que `extract(epoch from ...) / 3600` ja
+-- produzia antes (EXTRACT no Postgres devolve numeric, nao double precision), e
+-- "create or replace view" recusa mudar o TIPO de uma coluna existente
+-- (duration_hours/transicao_horas) -- so recriar a view do zero resolveria,
+-- quebrando tudo que depende dela nesse meio tempo.
+create or replace function horas_uteis_entre(inicio timestamptz, fim timestamptz)
+returns numeric
+language sql
+immutable
+as $$
+    select coalesce(sum(
+        greatest(0, extract(epoch from (
+            least(fim, (dia + interval '1 day') at time zone 'America/Sao_Paulo')
+            - greatest(inicio, dia at time zone 'America/Sao_Paulo')
+        )) / 3600)
+    ), 0)
+    from generate_series(
+        date_trunc('day', inicio at time zone 'America/Sao_Paulo'),
+        date_trunc('day', fim at time zone 'America/Sao_Paulo'),
+        interval '1 day'
+    ) as dia
+    where extract(dow from dia) not in (0, 6)  -- 0 = domingo, 6 = sabado
+      and inicio is not null and fim is not null and fim > inicio
+$$;
+
+
 create or replace view v_deal_stage_aging as
 with base as (
     select
@@ -120,10 +157,10 @@ select
     owner_rd_id,
     entered_at,
     case when vira_encerrado_standby then coalesce(closed_at, now()) else raw_exited_at end as exited_at,
-    extract(epoch from (
+    horas_uteis_entre(
+        entered_at,
         coalesce(case when vira_encerrado_standby then coalesce(closed_at, now()) else raw_exited_at end, now())
-        - entered_at
-    )) / 3600 as duration_hours
+    ) as duration_hours
 from base;
 
 
@@ -181,7 +218,7 @@ select
     de_etapa, de_etapa_nome, de_ordem,
     para_etapa, para_etapa_nome,
     de_entrada, para_entrada,
-    extract(epoch from (para_entrada - de_entrada)) / 3600 as transicao_horas
+    horas_uteis_entre(de_entrada, para_entrada) as transicao_horas
 from ordenado
 where para_entrada is not null;
 

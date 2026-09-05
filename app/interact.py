@@ -42,6 +42,10 @@ DIM_LABELS = {
     "mv_status": "Status MV",
     "campaign_label": "Campanha MV",
     "pipeline_name": "Pipeline",
+    "channel_group": "Canal",
+    "country": "País",
+    "device_category": "Dispositivo",
+    "utm_campaign": "Campanha (UTM)",
 }
 
 
@@ -146,7 +150,7 @@ def chips(page: str) -> None:
     """Barra de filtros ativos, com botao pra remover cada um."""
     drills = _bucket(page)
     if not drills:
-        st.caption("💡 Clique em qualquer barra, fatia ou estado do mapa para filtrar a página inteira por aquele dado.")
+        st.caption("💡 Clique em qualquer gráfico clicável para filtrar a página inteira por aquele dado.")
         return
 
     st.markdown("**Detalhando:**")

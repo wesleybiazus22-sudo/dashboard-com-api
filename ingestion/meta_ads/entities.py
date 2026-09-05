@@ -85,3 +85,16 @@ def parse_int(value) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def parse_action_sum(value) -> int | None:
+    """Soma o campo `value` de uma lista de acoes no formato do Meta
+    ([{"action_type": "...", "value": "42"}, ...]). Usado pros campos NOMEADOS de
+    video (video_thruplay_watched_actions, video_p50_watched_actions) -- diferente
+    do array generico `actions`, que fica cru pra view extrair (ver models.py).
+    Retorna None (nao 0) quando a lista esta ausente/vazia -- distingue "anuncio
+    nao e de video" de "e video, mas ninguem alcancou esse marco"."""
+    if not value:
+        return None
+    total = sum(parse_money(item.get("value")) or 0 for item in value)
+    return int(total)

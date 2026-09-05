@@ -111,17 +111,15 @@ col4.metric("Conectados → CRM", f"{pct_crm_dos_conectados}%", help="Dos conect
 
 st.divider()
 
-# Mais de uma SDR pode ter uma campanha com o mesmo rotulo (ex: "Agosto/Semana 2" da
-# Miriã e da Letícia sao campanhas DIFERENTES que so coincidem no nome da semana) --
-# sem desambiguar isso, os dois graficos abaixo colidiam no mesmo ponto do eixo X.
-label_counts = campaigns.groupby("campaign_label")["sdr_name"].nunique()
-labels_duplicados = set(label_counts[label_counts > 1].index)
-
-
+# O nome da SDR responsavel entra SEMPRE no rotulo, nao so quando duas SDRs
+# colidem no mesmo texto de semana -- alem de evitar a colisao no eixo X (ex:
+# "Agosto/Semana 2" da Miriã e da Letícia sao campanhas DIFERENTES que so
+# coincidem no nome da semana), mostrar o responsavel de forma consistente em
+# todo ponto e o que deixa o grafico legivel sem precisar cruzar com a cor da
+# legenda -- um rotulo sem o nome (so porque naquele periodo nenhuma outra SDR
+# rodou uma semana com o mesmo numero) parecia inconsistente/faltando dado.
 def _x_label(row) -> str:
-    if row["campaign_label"] in labels_duplicados:
-        return f"{row['campaign_label']} ({row['sdr_name']})"
-    return row["campaign_label"]
+    return f"{row['campaign_label']} ({row['sdr_name']})"
 
 
 # ordem cronologica dos rotulos no eixo X, mesmo com campanhas de SDRs diferentes

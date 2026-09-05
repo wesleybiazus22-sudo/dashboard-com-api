@@ -161,21 +161,55 @@ funil as (
     from crm_stages s
     join crm_pipelines p on p.rd_id = s.pipeline_rd_id
     where p.product_group = 'Máquina ISP'
-      -- etapas terminais/laterais nao fazem parte da progressao do funil
-      and s.name not in ('Encerrado/Standby', 'No-show', 'No Show')
+      -- etapas terminais/laterais nao fazem parte da progressao do funil -- "Desistiu"
+      -- foi adicionada ao pipeline Closer depois da ordem de Freemium (order=6, uma a
+      -- mais que Freemium=5); sem essa exclusao ela aparecia no funil como se fosse
+      -- um passo MAIS AVANCADO que Freemium, quando na verdade e uma saida (o
+      -- prospect desistiu), igual No-show/Encerrado-Standby.
+      --
+      -- "Reunião Marcada" (pipeline Closer) esta sendo descontinuada no RD por
+      -- virar redundante com "Reunião Agendada" (pipeline Qualificacao/SDR, que
+      -- ja e o passo real dessa etapa no funil) -- sem excluir, ela contaria como
+      -- um segundo passo "alcancado" depois de Reunião Agendada, duplicando a
+      -- mesma etapa de negocio sob dois nomes. O historico antigo com essa etapa
+      -- continua existindo em crm_deal_stage_history (nao apagamos nada), so para
+      -- de contar como progresso do funil daqui pra frente.
+      and s.name not in ('Encerrado/Standby', 'No-show', 'No Show', 'Desistiu', 'Reunião Marcada')
 ),
-alcancado as (
-    -- via historico: passou pela etapa de verdade
-    select distinct e.deal_id, f.passo, f.etapa
+-- Sinal bruto de alcance, ainda SEM propagar pra tras -- so "bateu direto" num
+-- passo, via historico ou por estar la agora.
+sinal_bruto as (
+    select distinct e.deal_id, f.passo
     from escopo e
     join crm_deal_stage_history sh on sh.deal_rd_id = e.deal_id
     join funil f on f.stage_rd_id = sh.stage_rd_id
     union
-    -- via etapa atual: esta nela ou em qualquer etapa posterior do funil
-    select distinct e.deal_id, f.passo, f.etapa
+    select distinct e.deal_id, atual.passo
     from escopo e
     join funil atual on atual.stage_rd_id = e.stage_rd_id
-    join funil f on f.passo <= atual.passo
+),
+-- O passo MAIS ALTO que cada negociacao ja tocou, por qualquer sinal.
+maximo_por_deal as (
+    select deal_id, max(passo) as passo_maximo
+    from sinal_bruto
+    group by deal_id
+),
+alcancado as (
+    -- Se uma negociacao alcancou o passo N, ela OBRIGATORIAMENTE passou por todo
+    -- passo 1..N-1 antes -- e assim que "alcancar uma etapa" tem que funcionar
+    -- num funil. Sem esse "credita tudo abaixo do maximo", uma negociacao cujo
+    -- HISTORICO comeca no meio do caminho (a sincronizacao antiga so gravava a
+    -- linha "seed" na etapa em que via a negociacao PELA PRIMEIRA VEZ, entao
+    -- negociacoes ja avancadas quando o polling as viu nunca ganharam uma linha
+    -- de "Primeira Conexao") e que hoje esta parada numa etapa terminal excluida
+    -- (Desistiu/Encerrado-Standby/No-show -- que nao tem passo, entao a etapa
+    -- atual tambem nao credita nada) perdia o credito da(s) etapa(s) inicial(is)
+    -- mesmo tendo precisado passar por elas na pratica -- e o motivo do funil
+    -- aparecer com uma etapa depois "maior" que a de antes (ex: 67 em "Em
+    -- Prospeccao" contra so 48 em "Primeira Conexao").
+    select m.deal_id, f.passo, f.etapa
+    from maximo_por_deal m
+    join funil f on f.passo <= m.passo_maximo
 )
 select deal_id, passo, etapa from alcancado;
 

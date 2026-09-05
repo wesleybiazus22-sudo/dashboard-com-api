@@ -14,6 +14,13 @@
 -- dentro do RD, fora do escopo deste repositorio).
 -- ======================================================================
 
+-- Colunas novas em meta_insights_daily (necessarias antes das views abaixo --
+-- `create_all` no scripts/init_db.py so cria tabelas que ainda nao existem, nao
+-- adiciona coluna em tabela ja existente). NULL de verdade quando o anuncio nao
+-- e de video (ver comentario no model MetaInsightDaily).
+alter table meta_insights_daily add column if not exists video_thruplay integer;
+alter table meta_insights_daily add column if not exists video_view_50 integer;
+
 
 -- Extrai de dentro do array JSONB `actions` (formato do Meta: uma lista de
 -- {"action_type": "...", "value": "..."}) as acoes que representam GERACAO DE LEAD.
@@ -22,17 +29,68 @@
 -- conversao offline). Por isso soma qualquer action_type que contenha "lead", em vez
 -- de travar num nome exato -- mais abrangente, ao custo de exigir revisao manual se
 -- o Meta introduzir um action_type nao relacionado que tambem contenha a palavra.
-create or replace view v_meta_insights_enriched as
+--
+-- CORRECAO (achado real, confirmado 3x em anuncios/dias diferentes -- "AD2 - Nao e
+-- mais um bot" em 31/08, "AD1 Video - Ainda nao automatiza" e "AD4 Video - Utiliza
+-- algum desses" em 04-05/09, todos na campanha PB LAL): toda vez que um lead real
+-- acontece, o Meta reporta o MESMO evento em ATE QUATRO action_types diferentes ao
+-- mesmo tempo, sempre juntos, sempre com o mesmo valor -- `lead`,
+-- `offsite_conversion.fb_pixel_lead`, `onsite_web_lead` e a conversao customizada
+-- `offsite_lead_add_20_s_calls`. Nao e erro de configuracao do usuario nos 2
+-- primeiros (comportamento documentado da Graph API pra pixel), mas os outros 2
+-- tambem batem toda vez que os 4 aparecem juntos -- ou sao o mesmo disparo do
+-- rastreamento do site (JS chamando o pixel/CAPI mais de uma vez pro mesmo evento),
+-- ou uma coincidencia repetida improvavel em 3 casos independentes. A confirmacao
+-- veio do proprio usuario: no dia 31/08 a soma antiga dava "4 leads" pra ESSE
+-- anuncio, e o CRM mostrava 2 leads reais NO DIA TODO (nao so nesse anuncio) --
+-- colapsando os 4 pra 1 aqui sobra exatamente 1 pra explicar via outro anuncio/
+-- adset com atividade no mesmo dia, o que fecha a conta. Por isso pega o MAIOR
+-- valor entre os 4 (nao soma) como "1 evento", e soma normalmente qualquer OUTRO
+-- action_type que contenha "lead" que apareca fora desse grupo -- ainda pode faltar
+-- alguma variante nova que o Meta introduza, mas cobre 100% do que ja foi observado
+-- nos dados reais desta conta.
+--
+-- `case ... when jsonb_typeof(...) = 'array'` em vez de `coalesce(i.actions, '[]')`:
+-- quando o Meta nao retorna nenhuma acao pro anuncio/dia, `actions` pode ficar
+-- gravado como o literal JSON `null` (um VALOR jsonb valido) em vez de NULL de
+-- banco -- `coalesce` so troca NULL de banco, entao passaria o `null` do JSON
+-- direto pro `jsonb_array_elements`, que quebra com "cannot extract elements
+-- from a scalar". Checar `jsonb_typeof` cobre os dois casos (NULL de banco E
+-- null dentro do JSON) e qualquer outro valor nao-array que apareca.
+-- `create or replace view` nao aceita a coluna final de `i.*` mudar de posicao --
+-- quando `meta_insights_daily` ganha uma coluna nova (ver ALTER acima), tudo que
+-- vem DEPOIS de `i.*` neste SELECT (leads_estimados, link_clicks) desloca de
+-- posicao, e o Postgres recusa com "cannot change name of view column". Precisa
+-- dropar e recriar em vez de substituir -- seguro porque todas as views que
+-- dependem desta sao recriadas logo abaixo neste mesmo arquivo.
+drop view if exists v_meta_insights_enriched cascade;
+create view v_meta_insights_enriched as
 select
     i.*,
     (
-        select coalesce(sum((a->>'value')::numeric), 0)
-        from jsonb_array_elements(coalesce(i.actions, '[]'::jsonb)) a
-        where a->>'action_type' ilike '%lead%'
+        select
+            coalesce(max((a->>'value')::numeric) filter (
+                where a->>'action_type' in (
+                    'lead', 'offsite_conversion.fb_pixel_lead',
+                    'onsite_web_lead', 'offsite_lead_add_20_s_calls'
+                )
+            ), 0)
+            + coalesce(sum((a->>'value')::numeric) filter (
+                where a->>'action_type' ilike '%lead%'
+                  and a->>'action_type' not in (
+                      'lead', 'offsite_conversion.fb_pixel_lead',
+                      'onsite_web_lead', 'offsite_lead_add_20_s_calls'
+                  )
+            ), 0)
+        from jsonb_array_elements(
+            case when jsonb_typeof(i.actions) = 'array' then i.actions else '[]'::jsonb end
+        ) a
     ) as leads_estimados,
     (
         select coalesce(sum((a->>'value')::numeric), 0)
-        from jsonb_array_elements(coalesce(i.actions, '[]'::jsonb)) a
+        from jsonb_array_elements(
+            case when jsonb_typeof(i.actions) = 'array' then i.actions else '[]'::jsonb end
+        ) a
         where a->>'action_type' = 'link_click'
     ) as link_clicks
 from meta_insights_daily i;

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from database.models import MetaAd, MetaAdSet, MetaCampaign, MetaInsightDaily
 from ingestion.meta_ads.client import MetaAdsClient
 from ingestion.meta_ads.entities import (
+    parse_action_sum,
     parse_date,
     parse_dt,
     parse_int,
@@ -39,6 +40,11 @@ AD_FIELDS = "id,name,adset_id,campaign_id,status,effective_status,creative{thumb
 INSIGHT_FIELDS = (
     "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,"
     "spend,impressions,clicks,reach,frequency,ctr,cpc,cpm,actions,cost_per_action_type,"
+    # Campos de engajamento de video -- NAO vem dentro do array generico `actions`,
+    # precisam ser pedidos por nome. video_p50_watched_actions = "assistiu pelo
+    # menos 50% do video" (o "View 50%" do Ads Manager); video_thruplay_watched_actions
+    # = ThruPlay (assistiu inteiro, ou 15s+ pra videos mais longos).
+    "video_thruplay_watched_actions,video_p50_watched_actions,"
     "date_start,date_stop"
 )
 
@@ -143,6 +149,8 @@ def sync_insights(db: Session, since: date | None = None, until: date | None = N
                 "cpm": parse_money(item.get("cpm")),
                 "actions": item.get("actions"),
                 "cost_per_action_type": item.get("cost_per_action_type"),
+                "video_thruplay": parse_action_sum(item.get("video_thruplay_watched_actions")),
+                "video_view_50": parse_action_sum(item.get("video_p50_watched_actions")),
                 "raw": item,
             },
         )
