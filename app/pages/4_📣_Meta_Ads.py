@@ -28,7 +28,7 @@ PAGE = "meta_ads"
 st.set_page_config(page_title="Meta Ads", page_icon="📣", layout="wide")
 inject_brand()
 
-head_col, refresh_col = st.columns([6, 1])
+head_col, refresh_col = st.columns([4, 1.3])
 with head_col:
     render_brand_header("📣 Meta Ads", "Performance de campanhas no Facebook/Instagram — investimento, alcance e conversão.")
 with refresh_col:
@@ -118,7 +118,8 @@ ctr = 100 * cliques / impressoes if impressoes else None
 cpc = investimento / cliques if cliques else None
 custo_por_lead = investimento / leads if leads else None
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1, k2, k3 = st.columns(3)
+k4, k5, k6 = st.columns(3)
 k1.metric("Investido", format_money(investimento))
 k2.metric("Impressões", format_int(impressoes))
 k3.metric("Cliques", format_int(cliques))

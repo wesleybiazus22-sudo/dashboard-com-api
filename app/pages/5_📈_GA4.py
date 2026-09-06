@@ -26,7 +26,7 @@ PAGE = "ga4"
 st.set_page_config(page_title="Google Analytics 4", page_icon="📈", layout="wide")
 inject_brand()
 
-head_col, refresh_col = st.columns([6, 1])
+head_col, refresh_col = st.columns([4, 1.3])
 with head_col:
     render_brand_header("📈 Google Analytics 4", "Tráfego e comportamento no site — sessões, origem, páginas e dispositivos.")
 with refresh_col:
@@ -104,7 +104,8 @@ else:
     engagement_rate = None
     avg_duration = None
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1, k2, k3 = st.columns(3)
+k4, k5, k6 = st.columns(3)
 k1.metric("Sessões", format_int(total_sessions))
 k2.metric("Usuários ativos", format_int(total_users))
 k3.metric("Novos usuários", format_int(total_new_users))

@@ -32,6 +32,7 @@ from app.theme import (
     base_layout,
     escala_azul_marca,
     format_int,
+    format_pct,
 )
 
 _GEOJSON = Path(__file__).resolve().parent / "assets" / "geo" / "br_states.geojson"
@@ -75,53 +76,33 @@ def cor_conversao(pct: float | None) -> str:
 
 # ---------------------------------------------------------------- Funil
 def funil(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
-    """Funil de alcance: barras horizontais decrescentes com volume, retencao desde o
-    topo e conversao da etapa anterior.
-
-    Por que barras e nao o `go.Funnel` classico: o funil aqui vai de 239 a 4
-    negociacoes (fator 60x). Na forma trapezoidal, tudo abaixo da terceira etapa vira
-    um fio invisivel e o grafico deixa de responder a pergunta que importa -- onde
-    exatamente o funil trava. Barras horizontais mantem todas as etapas legiveis e
-    deixam espaco pro rotulo de conversao, que e o dado diagnostico de verdade.
-
-    Espera as colunas de v_maquina_isp_funnel: etapa, negociacoes,
-    conversao_etapa_pct, retencao_topo_pct.
-    """
-    d = df.copy()
-    # invertido: Plotly desenha o primeiro item embaixo, e o funil precisa comecar em cima
-    d = d.sort_values("passo", ascending=False)
-
-    textos, cores = [], []
-    for _, r in d.iterrows():
-        conv = r.get("conversao_etapa_pct")
-        ret = r.get("retencao_topo_pct")
-        if conv is None or conv != conv:
-            textos.append(f"  {format_int(r['negociacoes'])}   ·   topo do funil")
-        else:
-            textos.append(
-                f"  {format_int(r['negociacoes'])}   ·   {conv:.0f}% da etapa anterior   ·   {ret:.1f}% do topo".replace(".", ",")
-            )
-        cores.append(cor_conversao(conv if conv == conv else 100))
-
-    fig = go.Figure(
-        go.Bar(
-            y=d["etapa"],
-            x=d["negociacoes"],
-            orientation="h",
-            marker=dict(color=cores),
-            customdata=d[["etapa"]].values,
-            text=textos,
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="<b>%{y}</b><br>%{x} negociações alcançaram esta etapa<extra></extra>",
-        )
-    )
-    fig.update_layout(bargap=0.35)
-    # folga a direita pro rotulo externo nao ser cortado
-    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, d["negociacoes"].max() * 1.55])
-    fig.update_yaxes(showgrid=False)
+    """Alcance em escala linear; taxas em coluna alinhada, sem semáforo arbitrário."""
+    d = df.sort_values("passo").copy()
+    fig = go.Figure()
+    if d.empty:
+        fig.add_annotation(text="Sem alcance no recorte", showarrow=False)
+        return base_layout(fig, height=altura)
+    total = max(float(d["negociacoes"].max()), 1)
+    fig.add_trace(go.Bar(
+        y=d["etapa"], x=d["negociacoes"], orientation="h",
+        marker=dict(color=BRAND_BLUE_600),
+        text=[format_int(v) for v in d["negociacoes"]],
+        textposition="outside", cliponaxis=False,
+        customdata=[[r["etapa"], format_pct(r.get("conversao_etapa_pct")),
+                     format_pct(r.get("retencao_topo_pct"))] for _, r in d.iterrows()],
+        hovertemplate="<b>%{y}</b><br>%{x} negociações alcançaram a etapa"
+                      "<br>Da anterior: %{customdata[1]}<br>Do topo: %{customdata[2]}<extra></extra>",
+    ))
+    for i, (_, row) in enumerate(d.iterrows()):
+        fig.add_annotation(x=1, xref="paper", y=row["etapa"], yref="y",
+            text="Base" if i == 0 else format_pct(row.get("conversao_etapa_pct")),
+            showarrow=False, xanchor="right", font=dict(size=13, color=TEXT_MUTED))
+    fig.add_annotation(x=1, xref="paper", y=1.08, yref="paper", text="Da anterior",
+                       showarrow=False, xanchor="right", font=dict(size=11, color=TEXT_MUTED))
     base_layout(fig, height=altura)
-    fig.update_layout(margin=dict(l=10, r=10, t=20, b=10), showlegend=False)
+    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.55])
+    fig.update_yaxes(showgrid=False, autorange="reversed")
+    fig.update_layout(showlegend=False, margin=dict(l=10, r=18, t=42, b=15), bargap=0.42)
     return fig
 
 
@@ -145,8 +126,8 @@ def queda_entre_etapas(df: pd.DataFrame, *, altura: int = 340) -> go.Figure:
             y=d["movimento"],
             x=d["perdidas_no_passo"],
             orientation="h",
-            marker=dict(color=[cor_conversao(c) for c in d["conversao_etapa_pct"]]),
-            text=[f"  −{format_int(v)}" for v in d["perdidas_no_passo"]],
+            marker=dict(color="#D68A35"),
+            text=[f"  {format_int(v)}" for v in d["perdidas_no_passo"]],
             textposition="outside",
             cliponaxis=False,
             hovertemplate="<b>%{y}</b><br>%{x} negociações não avançaram<extra></extra>",
@@ -319,7 +300,7 @@ def serie_temporal(
         fig.add_trace(
             go.Scatter(
                 x=dados[x], y=dados[coluna], name=coluna, mode="lines+markers",
-                line=dict(color=cor, width=2.5, shape="spline", smoothing=0.5),
+                line=dict(color=cor, width=2.5, shape="linear"),
                 marker=dict(size=7, color=cor),
                 fill="tozeroy" if area and i == 0 else None,
                 fillcolor=BRAND_BLUE_050 if area and i == 0 else None,
@@ -329,6 +310,7 @@ def serie_temporal(
     fig.update_yaxes(rangemode="tozero", ticksuffix=sufixo_y)
     fig.update_xaxes(showgrid=False)
     base_layout(fig, height=altura)
+    fig.update_layout(hovermode="x unified")
     return fig
 
 

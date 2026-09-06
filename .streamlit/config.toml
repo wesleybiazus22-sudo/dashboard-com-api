@@ -3,8 +3,9 @@
 # Fonte real (Satoshi/Montserrat) e raio de borda sao aplicados via CSS em
 # app/theme.py:inject_brand(), chamado no topo de cada pagina.
 [theme]
-primaryColor = "#0057EA"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F7F7F9"
-textColor = "#0A0B0D"
+base = "light"
+primaryColor = "#006FFF"
+backgroundColor = "#F6F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#17243B"
 font = "sans serif"

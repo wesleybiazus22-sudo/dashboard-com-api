@@ -29,7 +29,7 @@ PAGE = "geografia"
 st.set_page_config(page_title="Geografia", page_icon="🗺️", layout="wide")
 inject_brand()
 
-head_col, refresh_col = st.columns([6, 1])
+head_col, refresh_col = st.columns([4, 1.3])
 with head_col:
     render_brand_header("🗺️ Geografia da operação", "Onde a prospecção acontece, onde ela converte e onde ela trava.")
 with refresh_col:

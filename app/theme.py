@@ -7,17 +7,20 @@ tokens/typography.css) -- ver `inject_brand()` no fim do arquivo pra aplicar
 fonte/cor/raio ao chrome do Streamlit."""
 
 from pathlib import Path
+from base64 import b64encode
+from html import escape
+from functools import lru_cache
 
 import streamlit as st
 
 # ---------------------------------------------------------------- Marca (Develcode)
-BRAND_BLUE_950 = "#000E3D"
+BRAND_BLUE_950 = "#08142A"
 BRAND_BLUE_900 = "#001AE1"
 BRAND_BLUE_800 = "#0035E2"
 BRAND_BLUE_700 = "#0044E6"
-BRAND_BLUE_600 = "#0057EA"  # azul da logo -- primaria
-BRAND_BLUE_500 = "#026BF0"  # accent/interativo
-BRAND_BLUE_400 = "#0F7FFB"
+BRAND_BLUE_600 = "#006FFF"  # azul da logo -- primaria
+BRAND_BLUE_500 = "#1179FF"  # accent/interativo
+BRAND_BLUE_400 = "#01C8FF"
 BRAND_BLUE_300 = "#5AA7FF"
 BRAND_BLUE_200 = "#A8CCFF"
 BRAND_BLUE_100 = "#D6E5FF"
@@ -29,7 +32,7 @@ BRAND_INK_500 = "#6C7178"
 BRAND_INK_200 = "#E1E2E6"
 BRAND_INK_050 = "#F7F7F9"
 
-BRAND_FONT = "\"Satoshi\", \"Montserrat\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+BRAND_FONT = '"Encode Sans", "Segoe UI", Arial, sans-serif'
 BRAND_RADIUS_SM = "8px"
 BRAND_RADIUS_MD = "12px"
 BRAND_RADIUS_LG = "16px"
@@ -234,12 +237,16 @@ def base_layout(fig, height: int = 420):
         height=height,
         plot_bgcolor=CHART_SURFACE,
         paper_bgcolor=CHART_SURFACE,
-        font=dict(color=TEXT_PRIMARY, family=BRAND_FONT),
+        font=dict(color=TEXT_SECONDARY, family=BRAND_FONT, size=13),
+        separators=",.",
+        hoverlabel=dict(bgcolor="#FFFFFF", font_size=13),
+        bargap=0.3,
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(gridcolor=GRIDLINE, zerolinecolor=GRIDLINE)
-    fig.update_yaxes(gridcolor=GRIDLINE, zerolinecolor=GRIDLINE)
+    fig.update_yaxes(gridcolor="#EDF0F5", zerolinecolor=GRIDLINE, automargin=True)
+    fig.update_xaxes(automargin=True)
     return fig
 
 
@@ -254,11 +261,18 @@ def inject_brand() -> None:
     st.markdown(
         f"""
         <style>
-        @import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..800;1,300..800&display=swap');
-
-        html, body, [class*="css"] {{
+        @import url('https://fonts.googleapis.com/css2?family=Encode+Sans:wght@400;500;600;700&display=swap');
+        @font-face {{ font-family: 'ISP Virtual'; src: url(data:font/otf;base64,{_brand_asset('Virtual.otf')}) format('opentype'); font-display: swap; }}
+        html, body, .stApp, button, input, textarea, select,
+        [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"],
+        [data-testid="stMetric"], [data-testid="stMetric"] div,
+        [data-testid="stCaptionContainer"], [data-testid="stMarkdownContainer"] p,
+        [data-testid="stWidgetLabel"] p, [data-testid="stSidebarNav"] a,
+        [data-baseweb="radio"] p, [data-baseweb="select"] {{
             font-family: {BRAND_FONT};
+        }}
+        [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{
+            color: #536176;
         }}
 
         h1, h2, h3, h4, h5, h6 {{
@@ -286,17 +300,76 @@ def inject_brand() -> None:
         section[data-testid="stSidebar"] {{
             background-color: {BRAND_INK_050};
         }}
+        [data-testid="stAppViewContainer"] {{ background: #F6F7FB; }}
+        .block-container {{ max-width: 1520px; padding-top: 5rem; padding-bottom: 4rem; }}
+        h1 {{ font-size: clamp(1.7rem, 3vw, 2.5rem) !important; letter-spacing: -0.035em; }}
+        h2, h3 {{ letter-spacing: -0.025em; }}
+        [data-testid="stMetric"] {{
+            background: white; border: 1px solid #E4E9F2;
+            padding: 20px 22px; min-height: 142px;
+            box-shadow: 0 3px 12px rgba(0, 14, 61, 0.025);
+        }}
+        [data-testid="stMetricLabel"] {{ color: #536176; }}
+        [data-testid="stMetricValue"] {{ font-family: {BRAND_FONT}; font-size: clamp(1.5rem, 2.5vw, 2.1rem); font-weight: 700; color: #000E3D; }}
+        [data-testid="stMetricDelta"] {{ font-size: 0.8rem; }}
+        [data-testid="stPlotlyChart"] {{ background: white; border: 1px solid #E4E9F2; border-radius: 12px; padding: 8px; }}
+        [data-testid="stSidebar"] {{ border-right: 1px solid #E4E9F2; }}
+        [data-testid="stSidebarNav"] a {{ border-radius: 8px; margin: 3px 10px; }}
+        [data-testid="stSidebarNav"] a[aria-current="page"] {{ background: #D6E5FF; font-weight: 700; }}
+        [data-testid="stExpander"] {{ background: white; border-radius: 12px; }}
+        hr {{ border-color: #E4E9F2; margin: 2rem 0; }}
+
+        .isp-header {{
+            background: radial-gradient(ellipse at 100% 0%, #123C70 0%, transparent 62%), #08142A;
+            border: 1px solid #1B3657; border-radius: 16px; padding: 26px 30px; margin-bottom: 18px;
+        }}
+        .isp-wordmark {{ display: flex; flex-wrap: wrap; align-items: center; gap: 22px; margin-bottom: 24px; }}
+        .isp-wordmark img {{ width: 170px; height: auto; }}
+        .isp-wordmark span {{ color: #A3BAC6; font-size: 10px; letter-spacing: 0.14em; }}
+        .isp-eyebrow {{ color: #01C8FF; letter-spacing: 0.12em; font-size: 10px; font-weight: 600; }}
+        .isp-header h1 {{ color: #FFFFFF; margin: 8px 0 10px; padding: 0; font-size: 2rem !important; }}
+        .isp-header p {{ color: #C2D1E0; margin: 0; font-size: 14px; line-height: 1.6; }}
+        section[data-testid="stSidebar"] {{ background: #08142A; border-right: 1px solid #1B3657; }}
+        [data-testid="stSidebarNav"] a, [data-testid="stSidebarNav"] a span,
+        [data-testid="stSidebarNav"] a p {{ color: #C2D1E0; }}
+        [data-testid="stSidebarNav"] a:hover {{ background: #122849; }}
+        [data-testid="stSidebarNav"] a[aria-current="page"] {{ background: #163963; border-left: 3px solid #01C8FF; }}
+        [data-testid="stSidebarNav"] a[aria-current="page"] span {{ color: #FFFFFF; }}
+        [data-testid="stSidebarNav"] li > div, [data-testid="stSidebarNav"] h2,
+        [data-testid="stSidebarNav"] h3, [data-testid="stNavSectionHeader"] {{ color: #A3BAC6; }}
+        [data-testid="stSidebar"] button {{ color: #C2D1E0; }}
+        [data-testid="stMetric"] {{ border-top: 3px solid #006FFF; }}
+        .stButton > button[kind="primary"] {{ background: #006FFF; color: white; border-color: #006FFF; }}
+        .stButton > button:focus-visible, a:focus-visible {{ outline: 2px solid #006FFF; outline-offset: 3px; }}
+        .isp-overview-title {{ font-family: 'ISP Virtual', {BRAND_FONT}; color: #08142A; font-size: 2rem; margin: 10px 0 20px; }}
+
+        @media (max-width: 900px) {{
+            [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; }}
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+                width: 100% !important; flex: 1 1 100% !important; min-width: 0 !important;
+            }}
+            .block-container {{ padding: 4.5rem 1rem 3rem; }}
+            [data-testid="stMetric"] {{ min-height: 115px; padding: 16px; }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
+@lru_cache(maxsize=2)
+def _brand_asset(name: str) -> str:
+    return b64encode((Path(__file__).parent / "assets/maquina-isp" / name).read_bytes()).decode("ascii")
+
+
 def render_brand_header(title: str, subtitle: str | None = None) -> None:
-    """Cabecalho de pagina com a logo da Develcode + titulo, no lugar de st.title puro."""
-    logo_path = _LOGO_DIR / "develcode-horizontal-black.png"
-    if logo_path.exists():
-        st.image(str(logo_path), width=180)
-    st.title(title)
-    if subtitle:
-        st.caption(subtitle)
+    """Identidade Máquina ISP; título e contexto da área atual."""
+    clean_title = title.lstrip("📣📈🗺️🔻🎯 ")
+    st.markdown(
+        '<div class="isp-header"><div class="isp-wordmark">'
+        f'<img src="data:image/webp;base64,{_brand_asset("logo.webp")}" alt="Máquina ISP" />'
+        '<span>INTELIGÊNCIA DE NEGÓCIO</span></div>'
+        '<div class="isp-eyebrow">PROJETO INTERNO / MÁQUINA ISP</div>'
+        f'<h1>{escape(clean_title)}</h1>'
+        f'<p>{escape(subtitle or "")}</p></div>', unsafe_allow_html=True,
+    )

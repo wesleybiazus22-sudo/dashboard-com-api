@@ -7,17 +7,16 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.db import query
-from app.theme import CATEGORICAL, MV_STATUS_COLORS, base_layout, inject_brand
+from app.theme import CATEGORICAL, MV_STATUS_COLORS, base_layout, inject_brand, render_brand_header
 
 st.set_page_config(page_title="Melhor Venda", page_icon="🎯", layout="wide")
 inject_brand()
 
-st.image("app/assets/logos/develcode-horizontal-black.png", width=180)
 
-title_col, refresh_col = st.columns([6, 1])
+
+title_col, refresh_col = st.columns([4, 1.3])
 with title_col:
-    st.title("🎯 Melhor Venda — Outbound")
-    st.caption("Leads prospectados semanalmente, cruzados com o RD Station CRM.")
+    render_brand_header("Prospecção · Melhor Venda", "Leads prospectados semanalmente, cruzados com o RD Station CRM.")
 with refresh_col:
     st.write("")
     if st.button("🔄 Atualizar dados", help="Os dados ficam em cache por 5 min -- clique pra forçar releitura do banco"):
