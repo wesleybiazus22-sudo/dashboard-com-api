@@ -20,6 +20,7 @@ from database.connection import session_scope
 from database.models import SyncState
 from ingestion.ga4 import sync as ga4_sync
 from ingestion.meta_ads import sync as meta_sync
+from ingestion.whatsapp import analytics as whatsapp_analytics
 from ingestion.rd_crm import contacts as contacts_sync
 from ingestion.rd_crm import deals as deals_sync
 from ingestion.rd_crm import lost_reasons as lost_reasons_sync
@@ -99,6 +100,23 @@ def _sync_ga4(full: bool) -> bool:
     return ok
 
 
+def _sync_whatsapp_cost(full: bool) -> bool:
+    """Sincroniza o custo de mensageria do WhatsApp se as credenciais
+    estiverem configuradas. Mesmo criterio de `_sync_ga4`."""
+    if not settings.whatsapp_phone_number_id or not settings.whatsapp_access_token:
+        print("  whatsapp: pulado (WHATSAPP_PHONE_NUMBER_ID/WHATSAPP_ACCESS_TOKEN nao configurados)")
+        return True
+
+    ok = True
+    with session_scope() as db:
+        dias = 365 if full else 30
+        ok &= _run_step(
+            db, f"whatsapp: custo de conversa (ultimos {dias} dias)",
+            lambda: whatsapp_analytics.sync_conversation_cost(db, dias=dias),
+        )
+    return ok
+
+
 def run_full_sync() -> set[str]:
     ok_entities: set[str] = set()
 
@@ -132,10 +150,13 @@ def run_full_sync() -> set[str]:
 
     meta_ok = _sync_meta_ads(full=True)
     ga4_ok = _sync_ga4(full=True)
+    whatsapp_ok = _sync_whatsapp_cost(full=True)
 
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
     if not meta_ok:
         faltando.add("meta_ads")
+    if not whatsapp_ok:
+        faltando.add("whatsapp")
     if not ga4_ok:
         faltando.add("ga4")
     if faltando:
@@ -197,10 +218,13 @@ def run_incremental_sync() -> set[str]:
 
     meta_ok = _sync_meta_ads(full=False)
     ga4_ok = _sync_ga4(full=False)
+    whatsapp_ok = _sync_whatsapp_cost(full=False)
 
     faltando = set(INCREMENTAL_ENTITIES) - ok_entities
     if not meta_ok:
         faltando.add("meta_ads")
+    if not whatsapp_ok:
+        faltando.add("whatsapp")
     if not ga4_ok:
         faltando.add("ga4")
     if faltando:

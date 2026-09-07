@@ -1,16 +1,17 @@
 from fastapi import FastAPI
 
-from api.routes import auth, health, sync, webhooks
+from api.routes import auth, health, sync, webhooks, whatsapp
 
 app = FastAPI(
     title="Marketing & Sales Data Hub - API",
-    description="Recebe OAuth callback e webhooks do RD Station CRM, e dispara sincronizacoes.",
+    description="Recebe OAuth callback e webhooks do RD Station CRM/WhatsApp, e dispara sincronizacoes.",
     version="0.1.0",
 )
 
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(webhooks.router)
+app.include_router(whatsapp.router)
 app.include_router(sync.router)
 
 

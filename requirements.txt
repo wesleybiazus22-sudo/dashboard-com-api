@@ -13,6 +13,7 @@ pydantic-settings==2.5.2
 python-dotenv==1.0.1
 tenacity==9.0.0
 google-auth==2.35.0
+anthropic==1.4.0
 
 # --- Dashboard (Streamlit Community Cloud) ---
 streamlit==1.39.0

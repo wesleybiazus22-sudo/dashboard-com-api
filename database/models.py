@@ -70,6 +70,127 @@ class WebhookEvent(Base):
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class WhatsappWebhookEvent(Base):
+    """Log bruto de todo webhook recebido do WhatsApp Cloud API. Mesmo papel de
+    `WebhookEvent`, mas separado porque a chave de idempotencia e diferente: o
+    WhatsApp nao manda um `transaction_uuid` por evento -- usamos um hash do
+    corpo inteiro do payload como chave (ver `whatsapp/processor.py`), porque um
+    unico POST pode trazer varias mensagens/status de uma vez (nao ha 1 id
+    natural por request)."""
+
+    __tablename__ = "raw_whatsapp_webhook_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    dedupe_key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class WhatsappMessage(Base):
+    """Uma linha por mensagem trocada no WhatsApp (recebida OU enviada) -- historico
+    de conversa por contato. Serve pra auditoria (o que o agente disse/fez) e,
+    mais pra frente, pra dar contexto de conversa ao motor de IA (ver
+    ingestion/rd_crm/actions.py e a discussao do agente de atendimento).
+
+    `wamid` e o id nativo do WhatsApp pra essa mensagem especifica -- garante
+    idempotencia por mensagem (diferente de `WhatsappWebhookEvent.dedupe_key`,
+    que e por REQUEST inteira, que pode conter varias mensagens)."""
+
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    wamid: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    phone_number: Mapped[str] = mapped_column(String, nullable=False, index=True)  # numero do CONTATO (lead), sempre -- quem enviou/recebeu vem de `direction`
+    direction: Mapped[str] = mapped_column(String, nullable=False)  # "inbound" | "outbound"
+    message_type: Mapped[str] = mapped_column(String, nullable=False)  # text, image, template, button, ...
+    text_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String, nullable=True)  # nome de perfil do WhatsApp, quando vem no payload
+    deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # vinculo com o CRM -- preenchido quando o contato e identificado/criado
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class LlmCallLog(Base):
+    """Uma linha por chamada ao modelo de IA (Claude) feita pelo agente de
+    atendimento -- registra tokens e custo calculado, pra acompanhar gasto de
+    LLM no dashboard. Gravado pelo proprio agente a cada resposta gerada (ver
+    modulo do agente, ainda a construir) -- essa tabela nasce ANTES do agente
+    de proposito, pra o custo ja vir monitorado desde a primeira chamada real,
+    em vez de precisar ser adicionado depois por cima.
+
+    `custo_usd` fica congelado no valor calculado NA HORA da chamada (preco do
+    modelo x tokens) -- nao e recalculado depois, entao uma mudanca futura de
+    preco da Anthropic nao reescreve o historico."""
+
+    __tablename__ = "llm_call_log"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    model: Mapped[str] = mapped_column(String, nullable=False, index=True)  # ex: "claude-sonnet-5"
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Tokens de cache (leitura/escrita) ficam separados pq tem preco DIFERENTE
+    # do token normal de input -- somar tudo junto na mesma coluna inflaria o
+    # custo calculado se um dia usarmos prompt caching no agente.
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    custo_usd: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    finalidade: Mapped[str | None] = mapped_column(String, nullable=True)  # ex: "resposta_lead", "qualificacao"
+    phone_number: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
+class WhatsappConversationCost(Base):
+    """Custo REAL de mensageria cobrado pelo Meta, sincronizado direto da API
+    de analytics de conversas do WABA (nao e um calculo nosso -- e o numero
+    oficial que o Meta fatura, evita reconstruir a logica de janela de 24h/
+    categoria de conversa por conta propria, que tem detalhes proprios e muda
+    de vez em quando). Grao: (dia, categoria, tipo, numero de telefone)."""
+
+    __tablename__ = "whatsapp_conversation_cost"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+    conversation_category: Mapped[str] = mapped_column(String, nullable=False)  # MARKETING, UTILITY, AUTHENTICATION, SERVICE
+    conversation_type: Mapped[str] = mapped_column(String, nullable=False)  # REGULAR, FREE_TIER, FREE_ENTRY_POINT
+    phone_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    conversation_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class KnowledgeChunk(Base):
+    """Um pedaco da base de conhecimento que o agente consulta (RAG) pra
+    responder duvida sobre a solucao -- extraido dos materiais reais da
+    empresa (landing page oficial, hoje; outros documentos depois).
+
+    Retrieval por BUSCA TEXTUAL do Postgres (`to_tsvector`/`ts_rank`), nao por
+    embedding/busca semantica com vetor -- decisao deliberada: a base hoje tem
+    poucas dezenas de pedacos (cabe inteira em texto, sem precisar de vetor
+    pra achar o relevante), e assim evita depender de mais uma API externa
+    (embeddings) so pra isso. Se a base crescer muito (centenas de paginas,
+    perguntas muito parafraseadas que a busca textual comece a nao achar),
+    migrar pra pgvector e um upgrade localizado -- so troca `buscar_contexto`
+    em ingestion/llm/retrieval.py, o resto do agente nao muda.
+
+    `titulo` funciona como chave estavel pra upsert (ver
+    scripts/load_knowledge_base.py) -- recarregar o conteudo atualizado no
+    mesmo titulo substitui a versao antiga, em vez de duplicar."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    titulo: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    categoria: Mapped[str] = mapped_column(String, nullable=False, index=True)  # produto, agente, objecao, processo, ...
+    conteudo: Mapped[str] = mapped_column(Text, nullable=False)
+    fonte: Mapped[str | None] = mapped_column(String, nullable=True)  # de onde veio (ex: nome do arquivo original)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ======================================================================
 # DIMENSÕES (core)
 # ======================================================================
@@ -658,4 +779,9 @@ __all__ = [
     "Ga4PageDaily",
     "Ga4DeviceDaily",
     "Ga4GeoDaily",
+    "WhatsappWebhookEvent",
+    "WhatsappMessage",
+    "LlmCallLog",
+    "WhatsappConversationCost",
+    "KnowledgeChunk",
 ]

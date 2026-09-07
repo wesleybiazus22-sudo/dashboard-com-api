@@ -17,11 +17,12 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import CrmContact, CrmDeal
+from database.models import CrmContact, CrmDeal, WhatsappMessage
 from ingestion.meta_ads.capi import MetaConversionsApiClient
 from ingestion.rd_crm.deal_history import apply_sdr_closer_split, snapshot_deal, sync_deal_history
 from ingestion.rd_crm.deals import extract_deal_fields
 from ingestion.rd_crm.entities import upsert_by_rd_id
+from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
 
 __all__ = ["apply_sdr_closer_split", "process_deal_webhook"]
 
@@ -62,6 +63,71 @@ def _notify_meta_capi(db: Session, deal: CrmDeal, at: datetime) -> None:
         logger.exception("CAPI: falha ao enviar evento pra negociacao %s.", deal.rd_id)
 
 
+def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
+    """Primeiro contato PROATIVO do agente: quando uma negociacao NOVA cai no
+    CRM com uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS
+    (ver config/settings.py -- default = "paid_social"), manda a mensagem de
+    ABERTURA pro lead, sem esperar ele escrever primeiro.
+
+    So manda TEMPLATE (`WhatsappClient.send_template`), nunca texto livre --
+    regra do proprio Meta: quem nunca mandou mensagem pro nosso numero so
+    pode ser contatado via template pre-aprovado (fora da janela de 24h,
+    texto livre e recusado). A CONVERSA em si (com o Claude, RAG, etc.) so
+    comeca quando o lead RESPONDER -- isso e tratado em
+    `whatsapp/processor.py`, no ponto de extensao do fluxo de entrada.
+
+    Mesmo padrao de seguranca de `_notify_meta_capi`: e um efeito colateral
+    bem-vindo do webhook, nunca a responsabilidade primaria -- qualquer falha
+    (credencial ausente, template nao configurado, erro de rede, telefone
+    invalido) so gera log e segue em frente, nunca derruba o processamento
+    do webhook em si."""
+    origens_gatilho = {
+        s.strip() for s in settings.whatsapp_agent_trigger_source_rd_ids.split(",") if s.strip()
+    }
+    if not deal.source or deal.source not in origens_gatilho:
+        return
+
+    if not settings.whatsapp_agent_template_name:
+        logger.info(
+            "Agente: negociacao %s tem origem gatilho, mas WHATSAPP_AGENT_TEMPLATE_NAME "
+            "nao esta configurado -- pulando primeiro contato (configure o template no "
+            "Meta Business Manager pra ativar).", deal.rd_id,
+        )
+        return
+
+    contact = None
+    if deal.contact_rd_id:
+        contact = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
+    telefone = normalizar_telefone_br(contact.phone if contact else None)
+    if not telefone:
+        logger.info("Agente: negociacao %s sem telefone valido -- pulando primeiro contato.", deal.rd_id)
+        return
+
+    try:
+        client = WhatsappClient()
+        resposta = client.send_template(
+            to=telefone,
+            template_name=settings.whatsapp_agent_template_name,
+            language_code=settings.whatsapp_agent_template_language,
+        )
+        wamid = (resposta.get("messages") or [{}])[0].get("id")
+        db.add(WhatsappMessage(
+            wamid=wamid or f"outbound-sem-id:{deal.rd_id}:{_now().timestamp()}",
+            phone_number=telefone,
+            direction="outbound",
+            message_type="template",
+            text_body=f"[template: {settings.whatsapp_agent_template_name}]",
+            contact_name=contact.name if contact else None,
+            deal_rd_id=deal.rd_id,
+            raw=resposta,
+            occurred_at=_now(),
+        ))
+        db.commit()
+        logger.info("Agente: primeiro contato enviado pra negociacao %s (telefone %s).", deal.rd_id, telefone)
+    except Exception:  # noqa: BLE001 -- ver docstring: nunca deixa isso quebrar o webhook
+        logger.exception("Agente: falha ao mandar primeiro contato pra negociacao %s.", deal.rd_id)
+
+
 def _extract_deal_payload(payload: dict) -> dict:
     return payload.get("data") or payload.get("deal") or payload
 
@@ -99,3 +165,10 @@ def process_deal_webhook(db: Session, event_type: str, payload: dict) -> None:
     )
     if entrou_na_etapa_gatilho:
         _notify_meta_capi(db, deal, at)
+
+    # Primeiro contato do agente: so pra negociacao REALMENTE NOVA (sem
+    # historico anterior) -- nunca em updates subsequentes da mesma
+    # negociacao, senao o lead levaria uma mensagem de "abertura" de novo
+    # toda vez que algo mudasse no card.
+    if previous is None:
+        _iniciar_atendimento_agente(db, deal)

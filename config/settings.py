@@ -58,6 +58,47 @@ class Settings(BaseSettings):
     meta_capi_trigger_stage_rd_id: str = "6a4febe620cf310024567a82"  # Reuniao Agendada (Qualificacao)
     meta_capi_event_name: str = "Reuniao_Agendada"
 
+    # WhatsApp Cloud API -- canal do agente de atendimento. `whatsapp_access_token`
+    # comeca como o token TEMPORARIO do Graph API Explorer (poucas horas de vida,
+    # trocar sempre que expirar) ate a revisao do app liberar o token permanente do
+    # Usuario do Sistema -- mesma situacao transitoria que vivemos com o Meta Ads.
+    whatsapp_phone_number_id: str = ""
+    whatsapp_business_account_id: str = ""
+    whatsapp_access_token: str = ""
+    # Token que NOS escolhemos (string aleatoria propria, nao vem do Meta) e
+    # cadastramos na tela de configuracao do Webhook no app -- e o que prova, no
+    # handshake inicial (GET), que quem esta configurando o webhook la e quem
+    # controla esse servidor aqui.
+    whatsapp_verify_token: str = ""
+    # Segredo do app (Configuracoes > Basico do app do WhatsApp) -- usado pra
+    # validar a assinatura HMAC de cada POST recebido (header X-Hub-Signature-256).
+    # Sem isso, qualquer um que descobrisse a URL do webhook poderia mandar
+    # "mensagens" falsas que disparariam o agente e acoes no CRM.
+    whatsapp_app_secret: str = ""
+
+    # Motor de conversa do agente (Claude). Opcional pela mesma razao das
+    # demais credenciais externas -- so quem chama `ingestion/llm/agent.py`
+    # precisa disso. `anthropic_model` fica configuravel (nao hardcoded no
+    # agente) pra trocar de modelo sem mexer em codigo.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
+
+    # Primeiro contato PROATIVO do agente: quando uma negociacao nova cai no
+    # CRM com uma dessas origens (rd_id de crm_deal_sources, separados por
+    # virgula -- ver `python -m scripts...` ou consultar a tabela pra
+    # descobrir o rd_id de uma origem), o agente manda mensagem pro lead
+    # sozinho, sem esperar ele escrever primeiro (ver webhooks/processor.py).
+    # Default = "Outros | paid_social" (confirmado na base em 2026-09-06).
+    whatsapp_agent_trigger_source_rd_ids: str = "6a9a29ffbe2d5f0001fd2555"
+    # Nome do TEMPLATE de mensagem aprovado no Meta Business Manager -- e
+    # OBRIGATORIO pra iniciar conversa com quem nunca mandou mensagem pro
+    # nosso numero (fora da janela de 24h, texto livre e recusado pelo Meta,
+    # so template pre-aprovado pode "abrir" a conversa). Vazio = gatilho
+    # DESLIGADO (so loga, nao tenta enviar) ate o template existir e ser
+    # aprovado -- ver Meta for Developers > WhatsApp > Message Templates.
+    whatsapp_agent_template_name: str = ""
+    whatsapp_agent_template_language: str = "pt_BR"
+
     # App
     env: str = "development"
     log_level: str = "INFO"
@@ -137,4 +178,30 @@ def require_meta_capi_credentials() -> None:
         raise RuntimeError(
             "Credenciais da Meta Conversions API ausentes: " + ", ".join(faltando)
             + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
+        )
+
+
+def require_whatsapp_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para o WhatsApp Cloud API."""
+    faltando = [
+        nome
+        for nome, valor in (
+            ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
+            ("WHATSAPP_ACCESS_TOKEN", settings.whatsapp_access_token),
+        )
+        if not valor
+    ]
+    if faltando:
+        raise RuntimeError(
+            "Credenciais do WhatsApp ausentes: " + ", ".join(faltando)
+            + ". Configure no .env (local) ou nas variaveis de ambiente do servico."
+        )
+
+
+def require_anthropic_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para o motor de conversa (Claude)."""
+    if not settings.anthropic_api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY ausente. Configure no .env (local) ou nas variaveis de "
+            "ambiente do servico -- crie a chave em https://console.anthropic.com/settings/keys."
         )
