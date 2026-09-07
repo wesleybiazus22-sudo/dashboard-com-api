@@ -99,6 +99,20 @@ class Settings(BaseSettings):
     whatsapp_agent_template_name: str = ""
     whatsapp_agent_template_language: str = "pt_BR"
 
+    # Trava de piloto controlado pra RESPOSTA A MENSAGEM RECEBIDA (diferente do
+    # gatilho de saida acima, que ja e seguro por depender de template). Sem
+    # essa trava, o agente responderia QUALQUER mensagem que chegasse no
+    # numero, de qualquer lead real. Enquanto vazio (default), o
+    # comportamento e esse (responde todo mundo -- so ativar depois de
+    # validar bem a qualidade da conversa). Preenchido com numero(s) de
+    # telefone (formato da WhatsApp Cloud API -- so digitos com codigo do
+    # pais, ex: "5554912345678", separados por virgula), SO responde de
+    # verdade quando quem mandou a mensagem e um desses numeros -- pra
+    # qualquer outro numero, a mensagem continua sendo recebida e guardada
+    # normalmente, so nao gera resposta automatica (mesmo comportamento de
+    # antes do agente existir).
+    whatsapp_agent_restrict_to_phone_numbers: str = ""
+
     # App
     env: str = "development"
     log_level: str = "INFO"

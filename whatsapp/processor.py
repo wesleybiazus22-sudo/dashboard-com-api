@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from config.settings import settings
 from database.models import CrmContact, CrmDeal, WhatsappMessage
 from ingestion.llm.agent import conversar
 from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
@@ -117,7 +118,7 @@ def _carregar_historico(db: Session, phone_number: str, *, exceto_wamid: str, li
     return historico
 
 
-def _deal_rd_id_por_telefone(db: Session, phone_number: str) -> str | None:
+def _deal_por_telefone(db: Session, phone_number: str) -> CrmDeal | None:
     """Tenta achar uma negociacao existente ligada a esse telefone, pra o
     agente poder AGIR no CRM de verdade (mover etapa, criar tarefa) em vez de
     so simular. Melhor esforco: casa o telefone normalizado do contato do RD
@@ -132,13 +133,25 @@ def _deal_rd_id_por_telefone(db: Session, phone_number: str) -> str | None:
     contato = next((c for c in candidatos if normalizar_telefone_br(c.phone) == phone_number), None)
     if not contato:
         return None
-    deal = (
+    return (
         db.query(CrmDeal)
         .filter(CrmDeal.contact_rd_id == contato.rd_id)
         .order_by(CrmDeal.deal_created_at.desc())
         .first()
     )
-    return deal.rd_id if deal else None
+
+
+def _pode_responder_automaticamente(phone_number: str) -> bool:
+    """Trava de piloto controlado -- ver WHATSAPP_AGENT_RESTRICT_TO_PHONE_NUMBERS
+    em config/settings.py. Vazio = responde todo mundo (default, pra depois
+    que a conversa ja estiver validada); preenchido = so responde quando quem
+    mandou a mensagem e um dos numeros liberados pra teste."""
+    numeros_liberados = {
+        n.strip() for n in settings.whatsapp_agent_restrict_to_phone_numbers.split(",") if n.strip()
+    }
+    if not numeros_liberados:
+        return True
+    return phone_number in numeros_liberados
 
 
 def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_recebido: str, contact_name: str | None) -> None:
@@ -148,8 +161,16 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
     template pra RESPONDER, so pra iniciar contato -- ver
     webhooks/processor.py::_iniciar_atendimento_agente)."""
     try:
+        if not _pode_responder_automaticamente(phone_number):
+            logger.info(
+                "Agente: numero %s fora da lista de numeros liberados pra teste -- mensagem guardada, sem resposta automatica.",
+                phone_number,
+            )
+            return
+
+        deal = _deal_por_telefone(db, phone_number)
         historico = _carregar_historico(db, phone_number, exceto_wamid=wamid_recebido)
-        deal_rd_id = _deal_rd_id_por_telefone(db, phone_number)
+        deal_rd_id = deal.rd_id if deal else None
         resposta, _ = conversar(
             db, historico, texto, telefone=phone_number, deal_rd_id=deal_rd_id, modo_teste=False,
         )
