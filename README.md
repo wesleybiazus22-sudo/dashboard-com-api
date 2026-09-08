@@ -276,15 +276,23 @@ re-buscando os últimos 8 dias a cada rodada, porque o Meta revisa métricas de
 conversão por alguns dias após o fato (ver comentário em
 `ingestion/meta_ads/sync.py`).
 
-### 12.4 Limitação atual: sem cruzamento com o funil do CRM
+### 12.4 Cruzamento com o funil do CRM (custo real por lead)
 
 `database/views_meta_ads.sql` traz a performance do Meta isolada (por campanha,
-conjunto, anúncio e dia). Cruzar isso com o funil do RD CRM (custo por reunião
-realizada, por etapa) exige que a negociação carregue a UTM/campanha de origem —
-hoje `crm_deals.custom_fields` está vazio em todas as negociações, então esse
-vínculo não existe ainda. Isso se resolve configurando o RD Station Marketing para
-copiar a UTM/origem da conversão para o campo customizado da negociação; assim que
-esse dado começar a chegar, o cruzamento entra como nova view.
+conjunto, anúncio e dia). O RD Station já passou a gravar `utm_medium` no
+`custom_fields` de negociações recentes com origem paga — e esse campo guarda o
+NOME da campanha do Meta (confirmado contra a base real, bate com
+`meta_campaigns.name`, apesar do nome do campo sugerir "médio"). A página
+`app/pages/4_📣_Meta_Ads.py` já usa isso pro KPI **"Custo real por lead (CRM)"**:
+conta negociações de verdade cruzadas por essa UTM, em vez de usar o número
+autodeclarado do Meta (`leads_estimados`).
+
+**Limitação que ainda existe:** essa captura de UTM é recente — a maioria das
+negociações antigas não carrega esse dado, então a amostra de "leads reais" ainda
+é pequena e tende a subestimar o volume real (o que infla o custo real por lead
+mostrado). Fica mais preciso com o tempo. E um cruzamento mais fundo no funil
+(custo por reunião realizada, por venda fechada) ainda não existe — só a etapa de
+lead está coberta hoje.
 
 ## 13. Google Analytics 4 (Data API)
 

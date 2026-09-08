@@ -118,8 +118,37 @@ ctr = 100 * cliques / impressoes if impressoes else None
 cpc = investimento / cliques if cliques else None
 custo_por_lead = investimento / leads if leads else None
 
+# Leads REAIS confirmados no CRM, cruzados por campanha via UTM -- diferente do
+# "leads estimados" acima (que vem do array de acoes do Meta, autodeclarado pela
+# plataforma). Aqui contamos negociacoes de verdade que caem no CRM com o campo
+# personalizado `utm_medium` preenchido, que guarda o NOME da campanha do Meta
+# (confirmado contra a base real -- bate exatamente com `meta_campaigns.name`,
+# apesar do nome do campo sugerir "medio" -- e como a tag de rastreio foi
+# configurada no lado do RD/Meta, fora do escopo deste repositorio).
+#
+# LIMITACAO IMPORTANTE: essa captura de UTM no card da negociacao e recente --
+# hoje so uma fracao pequena das negociacoes carrega esse dado (a maioria das
+# negociacoes antigas nao tem). Por isso "custo real por lead" aqui tende a vir
+# MAIOR do que o real de verdade (o investimento total esta sendo dividido por
+# uma contagem de leads que ainda esta incompleta) -- e uma metrica que fica mais
+# precisa com o tempo, a medida que mais negociacoes acumularem esse rastreio,
+# nao um numero definitivo hoje.
+crm_leads_utm = query(
+    """
+    select raw->'custom_fields'->>'utm_medium' as campaign_name, deal_created_at::date as date
+    from crm_deals
+    where raw->'custom_fields'->>'utm_medium' is not null
+    """
+)
+if not crm_leads_utm.empty:
+    crm_leads_utm = filters.recorta_periodo(crm_leads_utm, "date", inicio, fim)
+    crm_leads_utm = crm_leads_utm[crm_leads_utm["campaign_name"].isin(campanhas_no_recorte["campaign_name"])]
+leads_reais_crm = len(crm_leads_utm) if not crm_leads_utm.empty else 0
+custo_real_por_lead = investimento / leads_reais_crm if leads_reais_crm else None
+
 k1, k2, k3 = st.columns(3)
 k4, k5, k6 = st.columns(3)
+k7, k8 = st.columns(2)
 k1.metric("Investido", format_money(investimento))
 k2.metric("Impressões", format_int(impressoes))
 k3.metric("Cliques", format_int(cliques))
@@ -130,6 +159,21 @@ k6.metric(
     format_money(custo_por_lead) + "/lead" if custo_por_lead else None,
     help="Extraído do array de ações do Meta -- soma qualquer action_type que contenha "
     "'lead' (não há um tipo único e universal para isso na API).",
+)
+k7.metric(
+    "Leads reais (CRM)", format_int(leads_reais_crm),
+    help="Negociações de verdade no CRM, cruzadas com a campanha do Meta pela UTM "
+    "gravada no card. Amostra ainda pequena -- esse rastreio começou a ser capturado "
+    "recentemente, a maioria das negociações antigas não tem essa informação. Cresce "
+    "em precisão com o tempo.",
+)
+k8.metric(
+    "Custo real por lead (CRM)", format_money(custo_real_por_lead) if custo_real_por_lead else "—",
+    help="Investimento total do recorte ÷ leads reais confirmados no CRM (não os "
+    "estimados pelo Meta). Como nem toda negociação real ainda carrega UTM, esse "
+    "número tende a estar SUPERESTIMADO hoje (menos leads contados do que os que "
+    "realmente existem) -- fica mais confiável conforme mais negociações acumularem "
+    "o rastreio.",
 )
 
 st.divider()
@@ -396,6 +440,8 @@ else:
 
 st.divider()
 st.caption(
-    "ℹ️ Ainda não há cruzamento com o funil do RD CRM (custo por reunião realizada) — "
-    "nenhuma negociação carrega hoje a UTM/campanha de origem. Ver seção 12.4 do README."
+    "ℹ️ O cruzamento de custo por LEAD real (ver \"Custo real por lead (CRM)\" acima) já "
+    "usa a UTM gravada no card da negociação -- mas ainda cobre uma fração pequena das "
+    "negociações (a captura começou recentemente). Cruzamento mais fundo no funil (custo "
+    "por reunião realizada, por venda fechada) ainda não existe -- só a etapa de lead."
 )

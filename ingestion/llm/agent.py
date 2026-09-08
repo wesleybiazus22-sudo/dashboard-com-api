@@ -7,13 +7,21 @@ devolve a resposta.
 Arquitetura: loop de tool-use da API do Claude direto (sem framework de
 agente) -- poucas ferramentas, bem definidas:
   - consultar_base_conhecimento: RAG, sempre real, so leitura.
-  - marcar_reuniao: o lead topou marcar a reuniao/demonstracao.
+  - sinalizar_interesse: o lead demonstrou interesse em avancar, mas AINDA
+    NAO confirmou um horario -- move a negociacao pra etapa "Interesse
+    Identificado" do pipeline [Maquina ISP] - Qualificacao.
+  - confirmar_reuniao: o lead confirmou um horario especifico -- move a
+    negociacao pra "Reuniao Agendada" e (se o Microsoft Graph estiver
+    configurado) cria o evento de verdade na agenda do dono da negociacao,
+    com link do Teams. Sem a integracao configurada, so cria uma tarefa pra
+    um humano criar a agenda manualmente.
   - encaminhar_para_humano: qualquer coisa que o agente NAO deve decidir
     sozinho -- acima de tudo, negociacao de preco/desconto (regra explicita
     do dono do produto: o agente nunca inventa nem estima mensalidade).
 
-`marcar_reuniao` e `encaminhar_para_humano` so mexem no CRM DE VERDADE quando
-ha um `deal_rd_id` real E `modo_teste=False` -- uma conversa de teste (sem
+Todas as ferramentas de acao (sinalizar_interesse, confirmar_reuniao,
+encaminhar_para_humano) so mexem no CRM/agenda DE VERDADE quando ha um
+`deal_rd_id` real E `modo_teste=False` -- uma conversa de teste (sem
 negociacao real por tras) nunca aciona nada fora do proprio teste, mesmo que
 o modelo "decida" chamar a ferramenta. Ver `conversar()` mais abaixo.
 """
@@ -21,31 +29,53 @@ o modelo "decida" chamar a ferramenta. Ver `conversar()` mais abaixo.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import anthropic
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import CrmDeal
+from database.models import CrmContact, CrmDeal, CrmUser
 from ingestion.llm.pricing import registrar_chamada
 from ingestion.llm.retrieval import buscar_contexto, montar_bloco_contexto
 from ingestion.rd_crm.actions import criar_tarefa, mover_negociacao_para_etapa
 
 NOME_AGENTE = "TEO"
+_FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
+_DURACAO_REUNIAO_MINUTOS = 30
 
-SYSTEM_PROMPT = f"""Você é {NOME_AGENTE}, o agente de vendas da Máquina.ISP -- uma solução de agentes de IA para provedores de internet (ISPs). Você atende pelo WhatsApp leads que chegaram através de anúncio ou do site, interessados em conhecer o produto.
 
-SEU OBJETIVO: conduzir a conversa até o lead aceitar marcar uma reunião/demonstração. Você não fecha venda por texto -- o objetivo é a reunião marcada, não o contrato assinado.
+_DIAS_SEMANA_PT = [
+    "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+    "sexta-feira", "sábado", "domingo",
+]
+
+
+def _montar_system_prompt() -> str:
+    """Monta o system prompt com a data/hora ATUAL embutida -- sem isso o
+    modelo nao tem como saber que dia e hoje pra calcular "amanha de manha"
+    etc de forma confiavel na hora de preencher `horario_iso` em
+    `confirmar_reuniao`. Nome do dia da semana escrito na mao (nao via
+    `%A`) porque isso depende do locale do sistema operacional, que aqui
+    fica em ingles por padrao."""
+    agora = datetime.now(_FUSO_BRASIL)
+    dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+    return f"""Você é {NOME_AGENTE}, o agente de vendas da Máquina.ISP -- uma solução de agentes de IA para provedores de internet (ISPs). Você atende pelo WhatsApp leads que chegaram através de anúncio ou do site, interessados em conhecer o produto.
+
+Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.
+
+SEU OBJETIVO: conduzir a conversa até o lead confirmar um horário de reunião/demonstração. Você não fecha venda por texto -- o objetivo é a reunião marcada, não o contrato assinado.
 
 COMO SE COMPORTAR:
 - Tom direto, humano, consultivo -- nunca robótico nem com respostas de manual. Frases curtas, como numa conversa real de WhatsApp (não escreva parágrafos longos).
 - Use a ferramenta `consultar_base_conhecimento` sempre que precisar de um fato sobre o produto (o que cada agente faz, como funciona a implementação, integrações, teste grátis, etc.) antes de responder -- nunca invente ou "chute" uma informação sobre o produto.
 - Se a base de conhecimento não trouxer a resposta pra alguma pergunta, admita com naturalidade que vai confirmar, e chame `encaminhar_para_humano`. Não invente.
 - REGRA INEGOCIÁVEL: você NUNCA informa, estima ou sugere um valor de mensalidade/preço, mesmo que o lead insista, peça "só uma faixa", ou diga que só decide sabendo o preço. Toda vez que o lead tocar em preço/valor/desconto/condição de pagamento: (1) diga com naturalidade que o valor é justamente o que se esclarece NA REUNIÃO com um consultor, olhando o tamanho e o cenário do provedor dele -- não é algo que se define por mensagem; (2) pode adiantar que tem 60 dias de teste sem custo de implementação; (3) chame `encaminhar_para_humano`; e (4) use isso como o gancho natural pra propor a reunião (ou reforçar a que já foi proposta) -- a reunião não é uma coisa separada de "alguém vai te chamar", ela É onde a resposta de preço está. Nunca deixe a pergunta de preço "no ar" tipo só "vou chamar o time comercial" sem amarrar isso à reunião.
-- Assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), proponha ativamente marcar a reunião -- não espere ele pedir. Ofereça horários de forma simples (ex: "amanhã de manhã ou à tarde funciona melhor pra você?") e, quando ele confirmar, chame `marcar_reuniao`.
-- Nunca chame `marcar_reuniao` sem o lead ter confirmado explicitamente um horário ou intenção clara de agendar.
+- FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule direto pra segunda sem passar pela primeira: (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse` e proponha ativamente horários (ex: "amanhã de manhã ou à tarde funciona melhor pra você?"); (2) SÓ quando o lead confirmar um horário específico (dia e período/hora), chame `confirmar_reuniao` com esse horário exato.
+- Nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
 - Pode fazer perguntas leves de qualificação (quantos assinantes tem o provedor, qual ERP usa) pra a reunião já chegar com contexto, mas sem parecer um formulário.
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não pergunte "manhã ou tarde?" de novo só porque chamou uma ferramenta no meio)."""
+
 
 _TOOLS = [
     {
@@ -65,21 +95,45 @@ _TOOLS = [
         },
     },
     {
-        "name": "marcar_reuniao",
+        "name": "sinalizar_interesse",
         "description": (
-            "Chame quando o lead confirmar explicitamente que quer marcar a reunião/"
-            "demonstração (aceitou um horário ou pediu pra agendar). Registra a "
-            "intenção no CRM."
+            "Chame quando o lead demonstrar interesse real em avançar (topar conhecer "
+            "melhor, topar uma reunião, pedir pra ver funcionando), mas AINDA NÃO "
+            "confirmou um horário específico. Move a negociação pra 'Interesse "
+            "Identificado' no CRM."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "resumo": {
-                    "type": "string",
-                    "description": "Resumo curto do combinado (horário sugerido, pontos de interesse do lead).",
-                },
+                "resumo": {"type": "string", "description": "Resumo curto do interesse demonstrado pelo lead."},
             },
             "required": ["resumo"],
+        },
+    },
+    {
+        "name": "confirmar_reuniao",
+        "description": (
+            "Chame SÓ quando o lead confirmar um horário ESPECÍFICO pra reunião/"
+            "demonstração (dia e período/hora). Move a negociação pra 'Reunião "
+            "Agendada' e cria o compromisso de verdade na agenda de quem vai atender."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "horario_iso": {
+                    "type": "string",
+                    "description": (
+                        "Data e hora combinadas, formato ISO-8601 com offset de fuso "
+                        "(ex: '2026-09-08T09:00:00-03:00'). Calcule a partir da data/hora "
+                        "atual informada no início deste prompt."
+                    ),
+                },
+                "resumo": {
+                    "type": "string",
+                    "description": "Resumo curto do combinado (pontos de interesse do lead, contexto pra reunião).",
+                },
+            },
+            "required": ["horario_iso", "resumo"],
         },
     },
     {
@@ -104,9 +158,56 @@ def _cliente() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
-def _dono_da_negociacao(db: Session, deal_rd_id: str) -> str | None:
+def _dono_da_negociacao(db: Session, deal_rd_id: str) -> CrmUser | None:
+    """Devolve o registro do usuario do RD dono ATUAL da negociacao (pra
+    usar o rd_id -- responsavel de tarefa -- e o e-mail -- conta do
+    Microsoft 365 pra criar o evento na agenda, ja que o dominio de e-mail
+    do RD e o mesmo do tenant Microsoft)."""
     deal = db.query(CrmDeal).filter(CrmDeal.rd_id == deal_rd_id).one_or_none()
-    return deal.current_owner_rd_id if deal else None
+    if not deal or not deal.current_owner_rd_id:
+        return None
+    return db.query(CrmUser).filter(CrmUser.rd_id == deal.current_owner_rd_id).one_or_none()
+
+
+def _pode_usar_calendario() -> bool:
+    return bool(settings.microsoft_tenant_id and settings.microsoft_client_id and settings.microsoft_client_secret)
+
+
+def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, horario_iso: str, resumo: str) -> str | None:
+    """Tenta criar o evento de verdade na agenda do dono da negociacao via
+    Microsoft Graph. Devolve o link da reuniao do Teams se der certo, ou
+    None se falhar por qualquer motivo (credencial, rede, horario invalido)
+    -- nunca deixa isso quebrar o fluxo principal, so cai pro fallback de
+    criar uma tarefa manual (ver `_executar_ferramenta`)."""
+    if not owner.email:
+        return None
+    try:
+        inicio = datetime.fromisoformat(horario_iso)
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=_FUSO_BRASIL)
+        fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
+
+        from ingestion.microsoft.client import MicrosoftCalendarClient
+
+        client = MicrosoftCalendarClient()
+
+        participante = None
+        deal = db.query(CrmDeal).filter(CrmDeal.rd_id == deal_rd_id).one_or_none()
+        if deal and deal.contact_rd_id:
+            contato = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
+            participante = contato.email if contato else None
+
+        evento = client.criar_evento(
+            email_organizador=owner.email,
+            assunto=f"Demonstração Máquina.ISP -- {resumo}"[:250],
+            inicio=inicio,
+            fim=fim,
+            participante_email=participante,
+            corpo=f"Reunião marcada automaticamente pelo agente {NOME_AGENTE}.<br>{resumo}",
+        )
+        return (evento.get("onlineMeeting") or {}).get("joinUrl")
+    except Exception:  # noqa: BLE001 -- fallback pra tarefa manual, nunca quebra a conversa
+        return None
 
 
 def _executar_ferramenta(
@@ -122,27 +223,50 @@ def _executar_ferramenta(
         chunks = buscar_contexto(db, entrada["pergunta"], limite=4)
         return montar_bloco_contexto(chunks)
 
-    if nome == "marcar_reuniao":
+    if nome == "sinalizar_interesse":
+        resumo = entrada.get("resumo", "")
+        if modo_teste or not deal_rd_id:
+            return f"[MODO TESTE -- nada foi alterado no CRM] Negociação seria movida pra 'Interesse Identificado'. Resumo: {resumo}"
+        mover_negociacao_para_etapa(db, deal_rd_id, settings.rd_stage_interesse_identificado_rd_id)
+        return "Interesse registrado no CRM com sucesso."
+
+    if nome == "confirmar_reuniao":
+        horario_iso = entrada.get("horario_iso", "")
         resumo = entrada.get("resumo", "")
         if modo_teste or not deal_rd_id:
             return (
-                "[MODO TESTE -- nada foi alterado no CRM] Em produção, a negociação "
-                "seria movida pra etapa 'Reunião Agendada' e uma tarefa de follow-up "
-                f"seria criada. Resumo combinado: {resumo}"
+                "[MODO TESTE -- nada foi alterado no CRM/agenda] Em produção, a negociação "
+                f"seria movida pra 'Reunião Agendada' e o evento seria criado pra {horario_iso}. "
+                f"Resumo: {resumo}"
             )
+
         mover_negociacao_para_etapa(db, deal_rd_id, settings.meta_capi_trigger_stage_rd_id)
         owner = _dono_da_negociacao(db, deal_rd_id)
+
+        link_teams = None
+        if owner and _pode_usar_calendario():
+            link_teams = _criar_evento_na_agenda(db, deal_rd_id=deal_rd_id, owner=owner, horario_iso=horario_iso, resumo=resumo)
+
         if owner:
+            if link_teams:
+                texto_tarefa = f"Reunião criada automaticamente na agenda pelo agente {NOME_AGENTE}: {resumo}. Link: {link_teams}"
+            else:
+                texto_tarefa = f"Criar a agenda pra reunião confirmada pelo agente {NOME_AGENTE} ({horario_iso}): {resumo}"
             criar_tarefa(
                 db,
                 deal_rd_id,
-                tipo="call",
-                texto=f"Confirmar reunião agendada pelo agente {NOME_AGENTE}: {resumo}",
-                responsavel_rd_id=owner,
-                criado_por_rd_id=owner,
-                prazo=datetime.now(timezone.utc) + timedelta(hours=2),
+                tipo="meeting",
+                texto=texto_tarefa,
+                responsavel_rd_id=owner.rd_id,
+                criado_por_rd_id=owner.rd_id,
+                prazo=datetime.now(timezone.utc) + timedelta(hours=1),
             )
-        return "Reunião registrada no CRM com sucesso."
+
+        return (
+            f"Reunião registrada no CRM com sucesso, evento criado na agenda com link do Teams: {link_teams}"
+            if link_teams
+            else "Reunião registrada no CRM com sucesso. Tarefa criada pra um humano montar a agenda (integração de calendário ainda não ativa)."
+        )
 
     if nome == "encaminhar_para_humano":
         motivo = entrada.get("motivo", "")
@@ -155,8 +279,8 @@ def _executar_ferramenta(
                 deal_rd_id,
                 tipo="task",
                 texto=f"Assumir conversa do agente {NOME_AGENTE}: {motivo}",
-                responsavel_rd_id=owner,
-                criado_por_rd_id=owner,
+                responsavel_rd_id=owner.rd_id,
+                criado_por_rd_id=owner.rd_id,
                 prazo=datetime.now(timezone.utc) + timedelta(hours=1),
             )
         return "Encaminhado pra um humano assumir esse ponto."
@@ -196,7 +320,7 @@ def conversar(
         resposta = cliente.messages.create(
             model=settings.anthropic_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=_montar_system_prompt(),
             tools=_TOOLS,
             messages=mensagens,
         )

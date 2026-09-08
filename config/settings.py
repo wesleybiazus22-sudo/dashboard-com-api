@@ -113,6 +113,26 @@ class Settings(BaseSettings):
     # antes do agente existir).
     whatsapp_agent_restrict_to_phone_numbers: str = ""
 
+    # Etapa "Interesse Identificado" do pipeline [Máquina ISP] - Qualificação --
+    # pra onde o agente move a negociacao quando o lead demonstra interesse em
+    # avancar mas AINDA NAO confirmou um horario de reuniao (ver
+    # `sinalizar_interesse` em ingestion/llm/agent.py). Confirmado direto na
+    # base em 2026-09-06 -- reconfirme se o pipeline for reestruturado.
+    rd_stage_interesse_identificado_rd_id: str = "687fe8cbd5677c001aa540b7"
+
+    # Microsoft Graph API (Calendario/Teams) -- usado pelo agente pra CRIAR o
+    # evento de verdade na agenda do dono da negociacao quando o lead confirma
+    # um horario (ver `confirmar_reuniao`). Autenticacao via APLICATIVO (client
+    # credentials, nao OAuth de usuario) -- precisa de um App Registration no
+    # Azure AD do tenant com a permissao "Calendars.ReadWrite" do tipo
+    # APPLICATION (nao "Delegated") com consentimento de admin, pra poder agir
+    # na agenda de qualquer usuario do dominio sem cada um logar. Opcional
+    # (vazio = agente so cria a tarefa de "criar a agenda" pra um humano fazer
+    # manualmente, sem integrar de verdade -- ver require_microsoft_credentials).
+    microsoft_tenant_id: str = ""
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+
     # App
     env: str = "development"
     log_level: str = "INFO"
@@ -218,4 +238,24 @@ def require_anthropic_credentials() -> None:
         raise RuntimeError(
             "ANTHROPIC_API_KEY ausente. Configure no .env (local) ou nas variaveis de "
             "ambiente do servico -- crie a chave em https://console.anthropic.com/settings/keys."
+        )
+
+
+def require_microsoft_credentials() -> None:
+    """Mesmo papel de `require_rd_credentials`, para o Microsoft Graph API
+    (agenda/Teams)."""
+    faltando = [
+        nome
+        for nome, valor in (
+            ("MICROSOFT_TENANT_ID", settings.microsoft_tenant_id),
+            ("MICROSOFT_CLIENT_ID", settings.microsoft_client_id),
+            ("MICROSOFT_CLIENT_SECRET", settings.microsoft_client_secret),
+        )
+        if not valor
+    ]
+    if faltando:
+        raise RuntimeError(
+            "Credenciais do Microsoft Graph ausentes: " + ", ".join(faltando)
+            + ". Configure no .env (local) ou nas variaveis de ambiente do servico -- "
+            "ver docstring de config/settings.py pra como criar o App Registration no Azure AD."
         )

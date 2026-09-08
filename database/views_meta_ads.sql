@@ -5,13 +5,16 @@
 -- Depende so das tabelas meta_* (ver database/models.py) -- nao depende de
 -- nenhuma view do RD CRM.
 --
--- IMPORTANTE (limitacao conhecida, ver conversa que originou este arquivo): hoje
--- NAO ha cruzamento com o funil do RD CRM (custo por reuniao realizada, por
--- etapa) porque nenhuma negociacao no CRM carrega atribuicao de campanha/UTM --
--- `crm_deals.raw.custom_fields` esta vazio em 100% das negociacoes atuais. Esse
--- cruzamento fica pronto pra ser adicionado assim que o RD Station Marketing
--- passar a gravar a UTM/campanha de origem no card da negociacao (configuracao
--- dentro do RD, fora do escopo deste repositorio).
+-- ATUALIZACAO (a limitacao abaixo nao e mais 100% verdadeira -- ver
+-- app/pages/4_Meta_Ads.py, KPI "Custo real por lead (CRM)"): o RD ja passou a
+-- gravar `utm_medium` (com o NOME da campanha do Meta, apesar do nome do campo)
+-- no custom_fields de negociacoes recentes com origem paga -- confirmado contra
+-- a base real em 2026-09-08. Isso ja alimenta um cruzamento de custo por LEAD
+-- real (nao estimado), direto no dashboard, sem view SQL dedicada (a query mora
+-- na propria pagina). O que AINDA nao existe e um cruzamento mais fundo no funil
+-- (custo por reuniao realizada, por venda fechada) -- so a etapa de lead esta
+-- coberta hoje, e ainda numa fracao pequena das negociacoes (a maioria das
+-- antigas nao carrega esse dado).
 -- ======================================================================
 
 -- Colunas novas em meta_insights_daily (necessarias antes das views abaixo --
