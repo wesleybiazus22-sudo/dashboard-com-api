@@ -120,11 +120,21 @@ custo_por_lead = investimento / leads if leads else None
 
 # Leads REAIS confirmados no CRM, cruzados por campanha via UTM -- diferente do
 # "leads estimados" acima (que vem do array de acoes do Meta, autodeclarado pela
-# plataforma). Aqui contamos negociacoes de verdade que caem no CRM com o campo
-# personalizado `utm_medium` preenchido, que guarda o NOME da campanha do Meta
-# (confirmado contra a base real -- bate exatamente com `meta_campaigns.name`,
-# apesar do nome do campo sugerir "medio" -- e como a tag de rastreio foi
-# configurada no lado do RD/Meta, fora do escopo deste repositorio).
+# plataforma).
+#
+# O cruzamento NAO pode usar so `utm_medium` (tentativa anterior) -- checagem
+# contra a base real mostrou que esse campo virou literalmente "paid_social" na
+# maioria das negociacoes (uso padrao/correto do parametro UTM, nao o nome da
+# campanha; so duas negociacoes antigas tinham, por configuracao ja mudada, o
+# nome da campanha ali por coincidencia). Os campos que realmente identificam a
+# origem, confirmados contra a base real em 2026-09-09:
+#   - `utm_campaing` (nome errado no RD, mas e o que existe) = nome do CONJUNTO
+#     DE ANUNCIOS (bate com `meta_adsets.name`)
+#   - `utm_content` = nome do ANUNCIO individual (bate com `meta_ads.name`)
+# Nem nome de conjunto nem de anuncio sao unicos sozinhos (o time reaproveita
+# padrao de nomenclatura entre campanhas diferentes) -- por isso o match usa os
+# DOIS campos juntos (conjunto + anuncio, com o anuncio restrito ao conjunto
+# encontrado), o que resolveu 100% das negociacoes testadas sem ambiguidade.
 #
 # LIMITACAO IMPORTANTE: essa captura de UTM no card da negociacao e recente --
 # hoje so uma fracao pequena das negociacoes carrega esse dado (a maioria das
@@ -135,9 +145,12 @@ custo_por_lead = investimento / leads if leads else None
 # nao um numero definitivo hoje.
 crm_leads_utm = query(
     """
-    select raw->'custom_fields'->>'utm_medium' as campaign_name, deal_created_at::date as date
-    from crm_deals
-    where raw->'custom_fields'->>'utm_medium' is not null
+    select mc.name as campaign_name, cd.deal_created_at::date as date
+    from crm_deals cd
+    join meta_adsets ms on ms.name = cd.raw->'custom_fields'->>'utm_campaing'
+    join meta_ads ma on ma.name = cd.raw->'custom_fields'->>'utm_content' and ma.adset_meta_id = ms.meta_id
+    join meta_campaigns mc on mc.meta_id = ms.campaign_meta_id
+    where cd.raw->'custom_fields'->>'utm_content' is not null
     """
 )
 if not crm_leads_utm.empty:
