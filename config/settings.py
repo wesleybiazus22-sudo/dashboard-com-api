@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     # antes do agente existir).
     whatsapp_agent_restrict_to_phone_numbers: str = ""
 
+    # Numeros liberados pra TESTE -- passam direto pelas travas de origem
+    # (trafego pago) e de etapa ("Primeira Conexao"). O agente responde
+    # esses numeros mesmo sem negociacao no CRM. Comparado pelo nucleo do
+    # numero (tolerante ao 9 e ao codigo de pais). Vazio = sem excecao.
+    whatsapp_agent_test_phone_numbers: str = ""
+
     # Trava POR ORIGEM (a que vale em producao): o agente so responde uma
     # mensagem recebida se o telefone bater com uma negociacao no CRM que veio
     # de TRAFEGO PAGO. Na pratica: a `source` da negociacao (nome resolvido em

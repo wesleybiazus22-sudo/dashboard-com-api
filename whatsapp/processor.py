@@ -172,6 +172,19 @@ def _pode_responder_automaticamente(phone_number: str) -> bool:
     return phone_number in numeros_liberados
 
 
+def _e_numero_de_teste(phone_number: str) -> bool:
+    """Numero na lista de teste (WHATSAPP_AGENT_TEST_PHONE_NUMBERS) -- passa
+    direto pelas travas de origem e de etapa. Compara pelo nucleo do numero."""
+    alvo = _chave_telefone(phone_number)
+    if not alvo:
+        return False
+    return any(
+        _chave_telefone(n.strip()) == alvo
+        for n in settings.whatsapp_agent_test_phone_numbers.split(",")
+        if n.strip()
+    )
+
+
 def _lead_de_trafego_pago(db: Session, deal: CrmDeal | None) -> bool:
     """Trava POR ORIGEM (ver WHATSAPP_AGENT_PAID_TRAFFIC_MARKER). O agente so
     responde lead de trafego pago -- checado por DOIS sinais na negociacao:
@@ -238,8 +251,10 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             )
             return
 
+        de_teste = _e_numero_de_teste(phone_number)
         deal = _deal_por_telefone(db, phone_number)
-        if not _lead_de_trafego_pago(db, deal):
+
+        if not de_teste and not _lead_de_trafego_pago(db, deal):
             logger.info(
                 "Agente: numero %s nao tem negociacao de trafego pago (deal=%s) -- mensagem guardada, sem resposta. "
                 "Se o card ainda nao sincronizou, o reprocessamento tenta de novo.",
@@ -247,7 +262,7 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             )
             return
 
-        if not _pode_iniciar_atendimento(db, phone_number, deal):
+        if not de_teste and not _pode_iniciar_atendimento(db, phone_number, deal):
             logger.info(
                 "Agente: numero %s -- negociacao %s ja passou de 'Primeira Conexao' (etapa %s) e o agente ainda nao "
                 "havia engajado -- humano assumiu, mensagem guardada sem resposta.",
