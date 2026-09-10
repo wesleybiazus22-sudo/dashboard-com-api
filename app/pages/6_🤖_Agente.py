@@ -171,25 +171,62 @@ st.subheader("Histórico de conversas")
 if mensagens_all.empty:
     st.caption("Nenhuma mensagem trocada ainda.")
 else:
-    contatos = sorted(mensagens_all["phone_number"].dropna().unique().tolist())
-    filtro_contato = st.selectbox("Filtrar por telefone", ["Todos"] + contatos, key=f"{PAGE}_filtro_contato")
-
-    mensagens_filtradas = mensagens_all if filtro_contato == "Todos" else mensagens_all[mensagens_all["phone_number"] == filtro_contato]
-
-    cols_msg = {
-        "occurred_at": "Quando", "phone_number": "Telefone", "contact_name": "Nome",
-        "direction": "Direção", "message_type": "Tipo", "text_body": "Mensagem",
-    }
-    tabela_msg = mensagens_filtradas[list(cols_msg)].rename(columns=cols_msg)
-    tabela_msg["Direção"] = tabela_msg["Direção"].map({"inbound": "⬅️ Recebida", "outbound": "➡️ Enviada"}).fillna(tabela_msg["Direção"])
-    st.dataframe(tabela_msg.head(300), use_container_width=True, hide_index=True, height=420)
-
-    st.download_button(
-        "⬇️ Baixar histórico em CSV",
-        tabela_msg.to_csv(index=False).encode("utf-8-sig"),
-        file_name="whatsapp_conversas.csv",
-        mime="text/csv",
+    # Rótulo do contato = nome (quando o WhatsApp mandou) + telefone, pra achar
+    # a conversa sem decorar número.
+    nomes_por_tel = (
+        mensagens_all.dropna(subset=["contact_name"])
+        .groupby("phone_number")["contact_name"].last()
+        .to_dict()
     )
+    contatos = sorted(mensagens_all["phone_number"].dropna().unique().tolist())
+    rotulo = {t: (f"{nomes_por_tel[t]} · {t}" if t in nomes_por_tel else t) for t in contatos}
+
+    filtro_contato = st.selectbox(
+        "Conversa", ["— visão geral (tabela) —"] + contatos,
+        format_func=lambda t: t if t.startswith("—") else rotulo.get(t, t),
+        key=f"{PAGE}_filtro_contato",
+    )
+
+    if filtro_contato.startswith("—"):
+        # Visão geral: tabela de tudo, boa pra escanear volume e baixar
+        cols_msg = {
+            "occurred_at": "Quando", "phone_number": "Telefone", "contact_name": "Nome",
+            "direction": "Direção", "message_type": "Tipo", "text_body": "Mensagem",
+        }
+        tabela_msg = mensagens_all[list(cols_msg)].rename(columns=cols_msg)
+        tabela_msg["Direção"] = tabela_msg["Direção"].map(
+            {"inbound": "⬅️ Recebida", "outbound": "➡️ Enviada"}
+        ).fillna(tabela_msg["Direção"])
+        st.caption("Escolha uma conversa acima para ver no formato de chat.")
+        st.dataframe(tabela_msg.head(500), use_container_width=True, hide_index=True, height=420)
+        st.download_button(
+            "⬇️ Baixar histórico em CSV",
+            tabela_msg.to_csv(index=False).encode("utf-8-sig"),
+            file_name="whatsapp_conversas.csv",
+            mime="text/csv",
+        )
+    else:
+        # Conversa única: renderiza como chat de WhatsApp (mais antiga em cima)
+        conversa = (
+            mensagens_all[mensagens_all["phone_number"] == filtro_contato]
+            .sort_values("occurred_at")
+        )
+        nome = nomes_por_tel.get(filtro_contato)
+        st.caption(
+            f"**{nome + ' · ' if nome else ''}{filtro_contato}** — "
+            f"{format_int(len(conversa))} mensagens · "
+            f"{format_int((conversa['direction'] == 'inbound').sum())} do lead, "
+            f"{format_int((conversa['direction'] == 'outbound').sum())} do agente"
+        )
+        # Box de altura fixa com rolagem interna -- a conversa nao estica a
+        # pagina toda por mais longa que fique.
+        with st.container(height=460, border=True):
+            for _, m in conversa.iterrows():
+                e_lead = m["direction"] == "inbound"
+                with st.chat_message("user" if e_lead else "assistant", avatar="🧑" if e_lead else "🤖"):
+                    corpo = m["text_body"] if pd.notna(m["text_body"]) and m["text_body"] else f"_({m['message_type']} — sem texto)_"
+                    st.markdown(corpo)
+                    st.caption(f"{pd.to_datetime(m['occurred_at']):%d/%m %H:%M}")
 
 st.divider()
 

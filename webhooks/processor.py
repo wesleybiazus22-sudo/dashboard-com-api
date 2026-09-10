@@ -64,24 +64,37 @@ def _notify_meta_capi(db: Session, deal: CrmDeal, at: datetime) -> None:
         logger.exception("CAPI: falha ao enviar evento pra negociacao %s.", deal.rd_id)
 
 
+def _primeiro_nome(nome_completo: str | None) -> str:
+    """Primeiro token do nome, capitalizado -- pra variavel {{1}} do template.
+    Fallback "tudo bem" (le natural em "Oi tudo bem!") quando nao ha nome."""
+    if nome_completo and nome_completo.strip():
+        return nome_completo.strip().split()[0].capitalize()
+    return "tudo bem"
+
+
 def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
-    """Primeiro contato PROATIVO do agente: quando uma negociacao NOVA cai no
-    CRM com uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS
-    (ver config/settings.py -- default = "paid_social"), manda a mensagem de
-    ABERTURA pro lead, sem esperar ele escrever primeiro.
+    """Primeiro contato PROATIVO do agente: quando uma negociacao cai no CRM com
+    uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS (ver
+    config/settings.py -- default = "paid_social"), manda a mensagem de ABERTURA
+    pro lead, sem esperar ele escrever primeiro.
 
     So manda TEMPLATE (`WhatsappClient.send_template`), nunca texto livre --
     regra do proprio Meta: quem nunca mandou mensagem pro nosso numero so
     pode ser contatado via template pre-aprovado (fora da janela de 24h,
     texto livre e recusado). A CONVERSA em si (com o Claude, RAG, etc.) so
-    comeca quando o lead RESPONDER -- isso e tratado em
-    `whatsapp/processor.py`, no ponto de extensao do fluxo de entrada.
+    comeca quando o lead RESPONDER (tocar no botao do template ou escrever) --
+    isso e tratado em `whatsapp/processor.py::_responder_com_agente`.
 
-    Mesmo padrao de seguranca de `_notify_meta_capi`: e um efeito colateral
-    bem-vindo do webhook, nunca a responsabilidade primaria -- qualquer falha
-    (credencial ausente, template nao configurado, erro de rede, telefone
-    invalido) so gera log e segue em frente, nunca derruba o processamento
-    do webhook em si."""
+    IDEMPOTENTE: pode ser chamada em qualquer webhook da negociacao (criacao ou
+    update). So dispara o template UMA vez por negociacao -- as checagens
+    abaixo (ja mandou template? o lead ja escreveu?) garantem isso, o que
+    permite reagir tambem ao caso da origem `paid_social` chegar so num update
+    posterior, sem risco de mandar a abertura duas vezes.
+
+    Mesmo padrao de seguranca de `_notify_meta_capi`: efeito colateral do
+    webhook, nunca a responsabilidade primaria -- qualquer falha (credencial
+    ausente, template nao configurado, erro de rede, telefone invalido) so
+    gera log e segue em frente."""
     origens_gatilho = {
         s.strip() for s in settings.whatsapp_agent_trigger_source_rd_ids.split(",") if s.strip()
     }
@@ -96,6 +109,12 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
         )
         return
 
+    # ja mandamos o template de abertura pra essa negociacao antes?
+    if db.query(WhatsappMessage.id).filter(
+        WhatsappMessage.deal_rd_id == deal.rd_id, WhatsappMessage.message_type == "template"
+    ).first():
+        return
+
     contact = None
     if deal.contact_rd_id:
         contact = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
@@ -104,12 +123,23 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
         logger.info("Agente: negociacao %s sem telefone valido -- pulando primeiro contato.", deal.rd_id)
         return
 
+    # o lead ja escreveu pra gente primeiro? entao a conversa ja abriu por conta
+    # dele -- o fluxo de entrada cuida, nao manda a abertura por cima.
+    if db.query(WhatsappMessage.id).filter(
+        WhatsappMessage.phone_number == telefone, WhatsappMessage.direction == "inbound"
+    ).first():
+        return
+
     try:
         client = WhatsappClient()
         resposta = client.send_template(
             to=telefone,
             template_name=settings.whatsapp_agent_template_name,
             language_code=settings.whatsapp_agent_template_language,
+            components=[{
+                "type": "body",
+                "parameters": [{"type": "text", "text": _primeiro_nome(contact.name if contact else None)}],
+            }],
         )
         wamid = (resposta.get("messages") or [{}])[0].get("id")
         db.add(WhatsappMessage(
@@ -167,9 +197,8 @@ def process_deal_webhook(db: Session, event_type: str, payload: dict) -> None:
     if entrou_na_etapa_gatilho:
         _notify_meta_capi(db, deal, at)
 
-    # Primeiro contato do agente: so pra negociacao REALMENTE NOVA (sem
-    # historico anterior) -- nunca em updates subsequentes da mesma
-    # negociacao, senao o lead levaria uma mensagem de "abertura" de novo
-    # toda vez que algo mudasse no card.
-    if previous is None:
-        _iniciar_atendimento_agente(db, deal)
+    # Primeiro contato do agente. Chamado em TODO webhook da negociacao (criacao
+    # e update) porque a origem `paid_social` as vezes so aparece num update
+    # posterior ao card ja existir -- a funcao e idempotente (so manda o
+    # template uma vez por negociacao, ver as checagens la dentro).
+    _iniciar_atendimento_agente(db, deal)

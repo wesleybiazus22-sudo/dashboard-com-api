@@ -119,6 +119,30 @@ class Settings(BaseSettings):
     # antes do agente existir).
     whatsapp_agent_restrict_to_phone_numbers: str = ""
 
+    # Trava POR ORIGEM (a que vale em producao): o agente so responde uma
+    # mensagem recebida se o telefone bater com uma negociacao no CRM que veio
+    # de TRAFEGO PAGO. Na pratica: a `source` da negociacao (nome resolvido em
+    # crm_deal_sources) OU o `utm_medium` gravado no card contem esta marca.
+    # Confirmado contra a base real: source = "Outros | paid_social",
+    # utm_medium = "paid_social". Lead de outra origem (organico, indicacao,
+    # numero errado) tem a mensagem guardada mas NAO recebe resposta -- fica
+    # pra um humano. Vazio = trava desligada (responde qualquer origem).
+    whatsapp_agent_paid_traffic_marker: str = "paid_social"
+
+    # Palavra-chave que, mandada pelo proprio numero no WhatsApp, APAGA o
+    # historico daquela conversa (linhas de whatsapp_messages daquele telefone)
+    # e faz o agente comecar do zero -- pra testar o fluxo de novo sem trocar de
+    # numero. Nao mexe no CRM nem no log de custo. Vazio = comando desligado.
+    whatsapp_agent_reset_keyword: str = "/reset"
+
+    # Etapa "Primeira Conexao" do pipeline [Máquina ISP] - Qualificação. O agente
+    # so INICIA o atendimento (primeira resposta) com um lead cuja negociacao
+    # esta nesta etapa -- se ja passou dela, e porque um humano assumiu, e o
+    # agente nao deve entrar. Depois que o agente ja respondeu a conversa pelo
+    # menos uma vez, ele continua normalmente, independente da etapa (ele mesmo
+    # move o card ao longo do funil). Vazio = sem checagem de etapa.
+    rd_stage_primeira_conexao_rd_id: str = "687fe8cbd5677c001aa540b4"
+
     # Etapa "Interesse Identificado" do pipeline [Máquina ISP] - Qualificação --
     # pra onde o agente move a negociacao quando o lead demonstra interesse em
     # avancar mas AINDA NAO confirmou um horario de reuniao (ver

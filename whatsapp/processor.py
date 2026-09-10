@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import CrmContact, CrmDeal, WhatsappMessage
+from database.models import CrmContact, CrmDeal, CrmDealSource, WhatsappMessage
 from ingestion.llm.agent import conversar
 from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
 
@@ -118,19 +118,38 @@ def _carregar_historico(db: Session, phone_number: str, *, exceto_wamid: str, li
     return historico
 
 
+def _chave_telefone(numero: str | None) -> str | None:
+    """Nucleo comparavel do telefone: DDD + 8 digitos finais, SEM codigo de
+    pais e SEM o 9 extra do celular brasileiro. O RD salva com o 9
+    (`5585981043020`), o WhatsApp as vezes manda sem (`558598104302`... ou o
+    caso real do teste: `555496123100`) -- comparar pelo nucleo faz os dois
+    baterem. Ex: `+5585 9 8104-3020` e `5585 8104-3020` -> ambos `8598104302`."""
+    if not numero:
+        return None
+    d = "".join(ch for ch in numero if ch.isdigit())
+    if d.startswith("55") and len(d) >= 12:
+        d = d[2:]  # tira o codigo do pais
+    if len(d) == 11:  # DDD + 9 + 8 digitos -> tira o 9
+        d = d[:2] + d[3:]
+    return d[-10:] if len(d) >= 10 else d
+
+
 def _deal_por_telefone(db: Session, phone_number: str) -> CrmDeal | None:
     """Tenta achar uma negociacao existente ligada a esse telefone, pra o
     agente poder AGIR no CRM de verdade (mover etapa, criar tarefa) em vez de
-    so simular. Melhor esforco: casa o telefone normalizado do contato do RD
-    contra o numero que mandou a mensagem (o formato salvo no RD e
-    inconsistente -- ver `normalizar_telefone_br`); se achar mais de uma
+    so simular. Casa pelo NUCLEO do numero (ver `_chave_telefone`) -- tolerante
+    ao 9 extra do celular e ao codigo de pais, porque o formato salvo no RD e o
+    que o WhatsApp manda nem sempre batem digito a digito. Se achar mais de uma
     negociacao pro mesmo contato, fica com a mais recente.
 
     Faz um scan simples em Python (nao um WHERE normalizado no SQL) -- aceitavel
-    pro volume atual de contatos; se a base crescer muito, vale mover a
-    normalizacao pra uma coluna indexada em vez de comparar em memoria."""
+    pro volume atual de contatos; se a base crescer muito, vale mover a chave
+    pra uma coluna indexada em vez de comparar em memoria."""
+    alvo = _chave_telefone(phone_number)
+    if not alvo:
+        return None
     candidatos = db.query(CrmContact).filter(CrmContact.phone.isnot(None)).all()
-    contato = next((c for c in candidatos if normalizar_telefone_br(c.phone) == phone_number), None)
+    contato = next((c for c in candidatos if _chave_telefone(c.phone) == alvo), None)
     if not contato:
         return None
     return (
@@ -143,15 +162,66 @@ def _deal_por_telefone(db: Session, phone_number: str) -> CrmDeal | None:
 
 def _pode_responder_automaticamente(phone_number: str) -> bool:
     """Trava de piloto controlado -- ver WHATSAPP_AGENT_RESTRICT_TO_PHONE_NUMBERS
-    em config/settings.py. Vazio = responde todo mundo (default, pra depois
-    que a conversa ja estiver validada); preenchido = so responde quando quem
-    mandou a mensagem e um dos numeros liberados pra teste."""
+    em config/settings.py. Vazio = sem restricao por numero (default);
+    preenchido = so responde quem estiver na lista (usado no piloto)."""
     numeros_liberados = {
         n.strip() for n in settings.whatsapp_agent_restrict_to_phone_numbers.split(",") if n.strip()
     }
     if not numeros_liberados:
         return True
     return phone_number in numeros_liberados
+
+
+def _lead_de_trafego_pago(db: Session, deal: CrmDeal | None) -> bool:
+    """Trava POR ORIGEM (ver WHATSAPP_AGENT_PAID_TRAFFIC_MARKER). O agente so
+    responde lead de trafego pago -- checado por DOIS sinais na negociacao:
+    (a) o nome da origem (crm_deal_sources.name) contem a marca, OU
+    (b) o `utm_medium` gravado no card contem a marca.
+    Sem negociacao ainda (card nao sincronizado) => False aqui, mas o
+    reprocessamento (scripts/reprocessar_whatsapp_pendentes.py) tenta de novo
+    depois que o card aparecer."""
+    marca = settings.whatsapp_agent_paid_traffic_marker.strip().lower()
+    if not marca:
+        return True  # trava desligada
+    if deal is None:
+        return False
+
+    utm_medium = ((deal.raw or {}).get("custom_fields") or {}).get("utm_medium") or ""
+    if marca in utm_medium.lower():
+        return True
+
+    if deal.source:
+        origem = db.query(CrmDealSource).filter(CrmDealSource.rd_id == deal.source).one_or_none()
+        if origem and origem.name and marca in origem.name.lower():
+            return True
+
+    return False
+
+
+def _agente_ja_engajou(db: Session, phone_number: str) -> bool:
+    """True se o agente ja mandou pelo menos uma mensagem pra esse telefone --
+    ou seja, a conversa ja esta em andamento (nao e mais primeiro contato)."""
+    return (
+        db.query(WhatsappMessage.id)
+        .filter(WhatsappMessage.phone_number == phone_number, WhatsappMessage.direction == "outbound")
+        .first()
+        is not None
+    )
+
+
+def _pode_iniciar_atendimento(db: Session, phone_number: str, deal: CrmDeal | None) -> bool:
+    """So deixa o agente INICIAR o atendimento (primeira resposta) se a
+    negociacao estiver na etapa "Primeira Conexao" -- ver
+    RD_STAGE_PRIMEIRA_CONEXAO_RD_ID. Se ja passou dessa etapa, um humano
+    assumiu e o agente nao deve entrar. Conversa ja em andamento (agente ja
+    respondeu antes) passa direto -- ele continua ate o fim, movendo o card
+    pelo funil por conta propria."""
+    etapa_inicial = settings.rd_stage_primeira_conexao_rd_id.strip()
+    if not etapa_inicial:
+        return True
+    if _agente_ja_engajou(db, phone_number):
+        return True
+    return bool(deal and deal.stage_rd_id == etapa_inicial)
 
 
 def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_recebido: str, contact_name: str | None) -> None:
@@ -169,6 +239,22 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             return
 
         deal = _deal_por_telefone(db, phone_number)
+        if not _lead_de_trafego_pago(db, deal):
+            logger.info(
+                "Agente: numero %s nao tem negociacao de trafego pago (deal=%s) -- mensagem guardada, sem resposta. "
+                "Se o card ainda nao sincronizou, o reprocessamento tenta de novo.",
+                phone_number, deal.rd_id if deal else None,
+            )
+            return
+
+        if not _pode_iniciar_atendimento(db, phone_number, deal):
+            logger.info(
+                "Agente: numero %s -- negociacao %s ja passou de 'Primeira Conexao' (etapa %s) e o agente ainda nao "
+                "havia engajado -- humano assumiu, mensagem guardada sem resposta.",
+                phone_number, deal.rd_id if deal else None, deal.stage_rd_id if deal else None,
+            )
+            return
+
         historico = _carregar_historico(db, phone_number, exceto_wamid=wamid_recebido)
         deal_rd_id = deal.rd_id if deal else None
         resposta, _ = conversar(
@@ -195,6 +281,27 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
         logger.info("Agente: respondeu pro numero %s (negociacao vinculada: %s).", phone_number, deal_rd_id or "nenhuma")
     except Exception:  # noqa: BLE001 -- ver docstring do modulo: nunca derruba o recebimento do webhook
         logger.exception("Agente: falha ao responder pro numero %s.", phone_number)
+
+
+def _e_comando_reset(texto: str | None) -> bool:
+    palavra = settings.whatsapp_agent_reset_keyword.strip().lower()
+    return bool(palavra) and (texto or "").strip().lower() == palavra
+
+
+def _resetar_conversa(db: Session, phone_number: str) -> None:
+    """Apaga o historico de whatsapp_messages desse telefone -- o agente
+    reconstroi o contexto so a partir dessa tabela (ver `_carregar_historico`),
+    entao apagar aqui = comecar do zero. Nao toca no CRM nem no llm_call_log
+    (auditoria de custo continua). Manda uma confirmacao curta."""
+    apagadas = (
+        db.query(WhatsappMessage).filter(WhatsappMessage.phone_number == phone_number).delete(synchronize_session=False)
+    )
+    db.commit()
+    logger.info("Agente: RESET pedido por %s -- %s mensagens apagadas.", phone_number, apagadas)
+    try:
+        WhatsappClient().send_text(to=phone_number, body="Conversa reiniciada. Pode mandar a primeira mensagem de novo.")
+    except Exception:  # noqa: BLE001
+        logger.exception("Agente: falha ao confirmar reset pro numero %s.", phone_number)
 
 
 def processar_evento(db: Session, payload: dict) -> int:
@@ -233,6 +340,9 @@ def processar_evento(db: Session, payload: dict) -> int:
                 logger.info("WhatsApp: mensagem recebida de %s (wamid=%s, tipo=%s)", numero, wamid, mensagem.get("type"))
 
                 texto = _extrai_texto(mensagem)
+                if _e_comando_reset(texto):
+                    _resetar_conversa(db, numero)
+                    continue
                 if texto:
                     _responder_com_agente(
                         db, phone_number=numero, texto=texto, wamid_recebido=wamid,
