@@ -88,15 +88,23 @@ class MetaConversionsApiClient:
         email: str | None = None,
         phone: str | None = None,
         event_source_url: str | None = None,
+        action_source: str = "website",
     ) -> dict:
         """Envia UM evento de conversao. `event_id` e a chave de deduplicacao do
         Meta -- reenviar o mesmo `event_id` (ex: mesmo negocio batendo o webhook
         2x por retry) nao conta como 2 eventos.
 
-        `action_source="system_generated"`: o evento nao nasce de uma visita ao
-        site nem de uma acao manual -- e o nosso pipeline reagindo a uma mudanca
-        de etapa no CRM. E o valor que a propria documentacao do Meta recomenda
-        pra esse cenario (conversao offline/CRM casada por fbclid)."""
+        `action_source="website"` (default): o lead ORIGINOU no site (clicou no
+        anuncio -> caiu na landing -> virou negociacao). O evento aqui e um
+        marco POSTERIOR do mesmo lead (chegou em "Reuniao Agendada" no CRM), mas
+        e a mesma jornada que comecou no site -- e com `fbc` (do fbclid) +
+        `event_source_url` o Meta consegue atribuir a conversao a campanha de
+        origem e MOSTRAR no relatorio de anuncios.
+
+        `action_source="system_generated"` (usado antes) e so pra evento SEM
+        nenhuma interacao de usuario (renovacao automatica, notificacao de
+        sistema) -- o Meta atribui esses de forma bem limitada e eles nao
+        aparecem no relatorio de campanha, que era exatamente o sintoma."""
         user_data: dict = {}
         if fbc:
             user_data["fbc"] = fbc
@@ -113,7 +121,7 @@ class MetaConversionsApiClient:
             "event_name": event_name,
             "event_time": event_time,
             "event_id": event_id,
-            "action_source": "system_generated",
+            "action_source": action_source,
             "user_data": user_data,
         }
         if event_source_url:

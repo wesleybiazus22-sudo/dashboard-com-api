@@ -203,6 +203,33 @@ else:
 
 st.divider()
 
+# ---------------------------------------------------------------- Snapshot atual
+st.subheader("Fotografia atual do funil")
+st.caption(
+    "Diferente do funil acima (histórico/acumulado, sempre decrescente), isto mostra "
+    "ONDE cada negociação do recorte está PARADA agora — inclusive quem já saiu do "
+    "fluxo (No-show, Encerrado/Standby, Desistiu). É o mesmo retrato que você vê "
+    "abrindo o quadro do CRM neste instante."
+)
+# Mesma ordenacao global usada em v_maquina_isp_stage_reach (etapas do pipeline
+# Closer vem sempre depois das da Qualificacao, com o mesmo "+100") -- mas aqui
+# SEM excluir as etapas terminais, porque o objetivo e mostrar onde as
+# negociacoes realmente estao, saidas do fluxo inclusive.
+deals["passo_snapshot"] = deals["stage_order"] + deals["pipeline_name"].map(
+    lambda p: 100 if p == "[Máquina ISP] Closer" else 0
+)
+snapshot_df = (
+    deals.groupby(["passo_snapshot", "stage_name"])["deal_id"].nunique()
+    .reset_index(name="negociacoes")
+    .rename(columns={"passo_snapshot": "passo", "stage_name": "etapa"})
+)
+st.plotly_chart(
+    charts.snapshot_estagios(snapshot_df), use_container_width=True,
+    key=f"{PAGE}_snapshot", config={"displayModeBar": False},
+)
+
+st.divider()
+
 with st.expander("Composição e evolução", expanded=False):
     # ---------------------------------------------------------------- Dimensoes clicaveis
     st.subheader("Composição da carteira")

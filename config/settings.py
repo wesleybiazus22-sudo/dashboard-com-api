@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # pra descobrir o rd_id de uma etapa/pipeline (crm_pipelines/crm_stages).
     meta_capi_trigger_stage_rd_id: str = "6a4febe620cf310024567a82"  # Reuniao Agendada (Qualificacao)
     meta_capi_event_name: str = "Reuniao_Agendada"
+    # URL de origem do lead (a landing que o anuncio aponta) -- enviada como
+    # `event_source_url` no evento CAPI. Com `action_source="website"`, o Meta usa
+    # isso + o `fbc` (do fbclid) pra atribuir a conversao a campanha certa e
+    # mostrar no relatorio de anuncios. Nao precisa ser a URL exata que o lead
+    # visitou (nao guardamos isso), a raiz da landing ja serve de sinal.
+    meta_capi_event_source_url: str = "https://maquina.isp.develcode.com.br/"
 
     # WhatsApp Cloud API -- canal do agente de atendimento. `whatsapp_access_token`
     # comeca como o token TEMPORARIO do Graph API Explorer (poucas horas de vida,

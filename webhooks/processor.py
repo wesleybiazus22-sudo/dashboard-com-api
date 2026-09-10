@@ -57,6 +57,7 @@ def _notify_meta_capi(db: Session, deal: CrmDeal, at: datetime) -> None:
             fbclid=deal.fbclid,
             email=contact.email if contact else None,
             phone=contact.phone if contact else None,
+            event_source_url=settings.meta_capi_event_source_url,
         )
         logger.info("CAPI: evento '%s' enviado pra negociacao %s.", settings.meta_capi_event_name, deal.rd_id)
     except Exception:  # noqa: BLE001 -- ver docstring: nunca deixa isso quebrar o webhook

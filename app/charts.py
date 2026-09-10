@@ -21,6 +21,7 @@ from app.theme import (
     BRAND_BLUE_600,
     BRAND_INK_200,
     BRAND_INK_500,
+    CAT_ORANGE,
     CATEGORICAL,
     GRIDLINE,
     STATUS_CRITICAL,
@@ -103,6 +104,33 @@ def funil(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
     fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.55])
     fig.update_yaxes(showgrid=False, autorange="reversed")
     fig.update_layout(showlegend=False, margin=dict(l=10, r=18, t=42, b=15), bargap=0.42)
+    return fig
+
+
+def snapshot_estagios(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
+    """Foto do momento: quantas negociacoes estao PARADAS em cada etapa agora,
+    incluindo terminais (No-show, Encerrado/Standby, Desistiu) -- diferente de
+    `funil()`, que e cumulativo/historico (quem ja alcancou aquela etapa ou
+    alguma depois). Sem % de conversao entre etapas -- nao faz sentido aqui,
+    porque uma etapa com poucas negociacoes pode simplesmente ser rapida de
+    passar, nao um gargalo."""
+    d = df.sort_values("passo").copy()
+    fig = go.Figure()
+    if d.empty:
+        fig.add_annotation(text="Sem negociações no recorte", showarrow=False)
+        return base_layout(fig, height=altura)
+    total = max(float(d["negociacoes"].max()), 1)
+    fig.add_trace(go.Bar(
+        y=d["etapa"], x=d["negociacoes"], orientation="h",
+        marker=dict(color=CAT_ORANGE),
+        text=[format_int(v) for v in d["negociacoes"]],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="<b>%{y}</b><br>%{x} negociações aqui agora<extra></extra>",
+    ))
+    base_layout(fig, height=altura)
+    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.25])
+    fig.update_yaxes(showgrid=False, autorange="reversed")
+    fig.update_layout(showlegend=False, margin=dict(l=10, r=18, t=20, b=15), bargap=0.42)
     return fig
 
 
