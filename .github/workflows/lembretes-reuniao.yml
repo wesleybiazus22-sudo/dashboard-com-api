@@ -1,0 +1,43 @@
+name: Lembretes de reuniao (Maquina ISP)
+
+# Mesmo criterio do sync-incremental.yml: roda dentro do proprio runner (fala
+# direto com o Postgres e a WhatsApp Cloud API), em vez de depender de um
+# endpoint no Render -- sem risco de cold start ou de BackgroundTask morta no
+# meio do envio.
+
+on:
+  schedule:
+    # A cada 15 min. Agendador "melhor esforco" do GitHub -- atraso ocasional
+    # e coberto pela tolerancia de +-10min de cada janela de lembrete (ver
+    # scripts/enviar_lembretes_reuniao.py).
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: lembretes-reuniao-maquina-isp
+  cancel-in-progress: false
+
+jobs:
+  lembretes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Enviar lembretes e varrer no-show
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RD_CRM_CLIENT_ID: ${{ secrets.RD_CRM_CLIENT_ID }}
+          RD_CRM_CLIENT_SECRET: ${{ secrets.RD_CRM_CLIENT_SECRET }}
+          RD_CRM_REDIRECT_URI: ${{ secrets.RD_CRM_REDIRECT_URI }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+        run: python -m scripts.enviar_lembretes_reuniao

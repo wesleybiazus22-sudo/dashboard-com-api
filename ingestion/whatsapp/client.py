@@ -103,11 +103,22 @@ class WhatsappClient:
             "template": template,
         })
 
-    def mark_as_read(self, wamid: str) -> dict:
+    def mark_as_read(self, wamid: str, *, mostrar_digitando: bool = False) -> dict:
         """Marca uma mensagem recebida como lida (2 tiques azuis) -- puramente
-        cosmetico pro lead, mas passa a impressao de atendimento ativo."""
-        return self._post({
+        cosmetico pro lead, mas passa a impressao de atendimento ativo.
+
+        Com `mostrar_digitando=True`, o mesmo request tambem liga o balao de
+        "digitando..." pro lead, por ate 25s OU ate a proxima mensagem de
+        verdade ser enviada (o que vier primeiro) -- ver
+        https://developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators.
+        Chamar assim que a mensagem chegar, ANTES de gerar a resposta (que
+        pode levar alguns segundos por causa da chamada ao Claude + consultas
+        no CRM) -- e exatamente a janela que esse indicador cobre."""
+        corpo: dict = {
             "messaging_product": "whatsapp",
             "status": "read",
             "message_id": wamid,
-        })
+        }
+        if mostrar_digitando:
+            corpo["typing_indicator"] = {"type": "text"}
+        return self._post(corpo)

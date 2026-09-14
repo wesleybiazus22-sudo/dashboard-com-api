@@ -254,7 +254,16 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
         de_teste = _e_numero_de_teste(phone_number)
         deal = _deal_por_telefone(db, phone_number)
 
-        if not de_teste and not _lead_de_trafego_pago(db, deal):
+        # Excecao a trava de origem: se o agente (via scripts/enviar_lembretes_reuniao.py,
+        # que manda templates pra QUALQUER negociacao do funil de qualificacao com
+        # reuniao marcada -- trafego pago ou nao) ja mandou alguma mensagem pra esse
+        # telefone antes, a decisao de "vale a pena falar com esse lead" ja foi
+        # tomada -- a resposta dele (ex: pedindo pra remarcar) nao pode cair no
+        # vazio so por causa da origem. Mesmo criterio que ja libera a continuacao
+        # de conversa em `_pode_iniciar_atendimento` logo abaixo.
+        ja_engajado = _agente_ja_engajou(db, phone_number)
+
+        if not de_teste and not ja_engajado and not _lead_de_trafego_pago(db, deal):
             logger.info(
                 "Agente: numero %s nao tem negociacao de trafego pago (deal=%s) -- mensagem guardada, sem resposta. "
                 "Se o card ainda nao sincronizou, o reprocessamento tenta de novo.",
@@ -269,6 +278,11 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
                 phone_number, deal.rd_id if deal else None, deal.stage_rd_id if deal else None,
             )
             return
+
+        try:
+            WhatsappClient().mark_as_read(wamid_recebido, mostrar_digitando=True)
+        except Exception:  # noqa: BLE001 -- so cosmetico, nunca pode travar a resposta de verdade
+            logger.exception("Agente: falha ao marcar como lida/mostrar 'digitando' (wamid=%s).", wamid_recebido)
 
         historico = _carregar_historico(db, phone_number, exceto_wamid=wamid_recebido)
         deal_rd_id = deal.rd_id if deal else None

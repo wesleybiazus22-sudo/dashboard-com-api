@@ -10,6 +10,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -441,6 +442,28 @@ class CrmMeeting(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class AgenteLembreteReuniao(Base):
+    """Controla os 3 lembretes automaticos (vespera 20h, manha 08h, 1h antes)
+    de uma reuniao marcada (`crm_tasks` tipo 'meeting') no pipeline [Máquina
+    ISP] - Qualificação -- ver scripts/enviar_lembretes_reuniao.py. 1 linha
+    por (negociacao, horario da reuniao): se a reuniao for reagendada
+    (`crm_tasks.due_at` muda), uma linha NOVA e criada pro novo horario e os
+    lembretes recomecam do zero pra ele -- a linha antiga fica orfa e
+    inofensiva, nunca e apagada (historico)."""
+
+    __tablename__ = "agente_lembretes_reuniao"
+    __table_args__ = (UniqueConstraint("deal_rd_id", "reuniao_due_at", name="uq_lembrete_deal_horario"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    deal_rd_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    reuniao_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    vespera_enviado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    manha_enviado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    uma_hora_antes_enviado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    no_show_marcado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 # ======================================================================

@@ -12,12 +12,13 @@ app consegue agir na agenda de QUALQUER usuario do dominio via
 -- mesmo principio do Usuario do Sistema do Meta e do token do RD CRM (ver
 docstring de config/settings.py).
 
-ATENCAO: construido a partir da documentacao publica da Microsoft Graph API,
-AINDA NAO VALIDADO contra um tenant real -- diferente do resto dos clientes
-deste projeto, que foram testados contra a API real antes de dar como pronto
-(ver ingestion/rd_crm/actions.py). Assim que as credenciais chegarem, repetir
-o mesmo processo: testar contra um evento de teste de verdade, confirmar o
-formato exato do payload/resposta, e so entao considerar validado.
+VALIDADO contra o tenant real em 2026-09-12: token via client credentials,
+`verificar_disponibilidade` nas agendas de miria.martins@ e wesley.hardt@, e
+`criar_evento` (evento de teste na agenda da Miria, com link do Teams
+confirmado em `onlineMeeting.joinUrl` -- exatamente o campo que este client
+le). App Registration "Agente Máquina ISP - Agenda" no Entra ID, permissao
+"Calendars.ReadWrite" tipo APPLICATION com consentimento de admin ja
+concedido.
 """
 
 from datetime import datetime
@@ -100,13 +101,15 @@ class MicrosoftCalendarClient:
         assunto: str,
         inicio: datetime,
         fim: datetime,
-        participante_email: str | None = None,
+        participantes: list[str] | None = None,
         corpo: str = "",
     ) -> dict:
         """Cria o evento na agenda de `email_organizador`, com link de
-        reuniao do Teams gerado automaticamente (`isOnlineMeeting`). Se
-        `participante_email` vier preenchido (ex: e-mail do lead, quando
-        conhecido), convida esse contato tambem."""
+        reuniao do Teams gerado automaticamente (`isOnlineMeeting`). Cada
+        e-mail em `participantes` (ex: o lead, e/ou uma segunda pessoa da
+        Maquina.ISP cruzada via MICROSOFT_CALENDAR_CROSS_MAP) entra como
+        convidado obrigatorio -- o organizador ja fica incluso automaticamente
+        pelo proprio Graph, nao precisa (nem deve) estar nessa lista."""
         payload: dict = {
             "subject": assunto,
             "body": {"contentType": "HTML", "content": corpo},
@@ -115,6 +118,8 @@ class MicrosoftCalendarClient:
             "isOnlineMeeting": True,
             "onlineMeetingProvider": "teamsForBusiness",
         }
-        if participante_email:
-            payload["attendees"] = [{"emailAddress": {"address": participante_email}, "type": "required"}]
+        if participantes:
+            payload["attendees"] = [
+                {"emailAddress": {"address": email}, "type": "required"} for email in participantes
+            ]
         return self._request("POST", f"/users/{email_organizador}/events", json=payload)

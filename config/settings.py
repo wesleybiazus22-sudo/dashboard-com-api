@@ -169,6 +169,40 @@ class Settings(BaseSettings):
     microsoft_client_id: str = ""
     microsoft_client_secret: str = ""
 
+    # Mapeamento "dono da negociacao -> segunda pessoa cuja agenda tambem
+    # precisa estar livre" pra confirmar uma reuniao (ver `confirmar_reuniao`
+    # em ingestion/llm/agent.py). Formato: "email_dono:email_segunda,..." --
+    # dono nao mapeado aqui so checa a propria agenda (cruzamento e opcional
+    # por pessoa, nao obrigatorio). Decisao do dono do produto em 2026-09-11:
+    # quando QUALQUER uma das duas agendas estiver ocupada no horario pedido,
+    # o agente NAO confirma a reuniao (nem move a negociacao de etapa, nem
+    # cria tarefa de fallback) -- so pede outro horario ao lead.
+    microsoft_calendar_cross_map: str = "miria.martins@develcode.com.br:wesley.hardt@develcode.com.br"
+
+    # Pipeline [Máquina ISP] - Qualificação -- escopo da automacao de lembrete
+    # de reuniao (ver scripts/enviar_lembretes_reuniao.py). Decisao do dono do
+    # produto em 2026-09-11: NAO cobre o pipeline [Máquina ISP] Closer nem
+    # outros, so este.
+    rd_pipeline_maquina_isp_qualificacao_rd_id: str = "687fe8cbd5677c001aa540b2"
+
+    # Etapa "No-show" do pipeline acima -- pra onde a negociacao vai quando a
+    # reuniao marcada passa do horario e a tarefa continua "open" no RD (ninguem
+    # marcou como concluida) -- sinal de que a reuniao nao aconteceu.
+    rd_stage_no_show_rd_id: str = "6a7a21e89b898f00253e5577"
+
+    # Templates aprovados no Meta pros 3 lembretes automaticos de reuniao
+    # (vespera 20h do dia anterior, manha 08h do dia, 1h antes do horario
+    # marcado) -- ver scripts/enviar_lembretes_reuniao.py. Cobre QUALQUER
+    # negociacao do pipeline acima com uma tarefa tipo 'meeting' aberta e
+    # due_at no futuro, trafego pago ou nao (o due_at que a SDR ja preenche
+    # manualmente ao marcar a reuniao no RD e a fonte de verdade -- decisao do
+    # dono do produto em 2026-09-11, ver docstring do script). So a mensagem da
+    # manha tem botao de confirmacao; as outras duas sao so texto de lembrete.
+    # Vazio (default) = aquele lembrete especifico fica desligado.
+    whatsapp_agent_reminder_template_vespera: str = ""
+    whatsapp_agent_reminder_template_manha: str = ""
+    whatsapp_agent_reminder_template_1h_antes: str = ""
+
     # App
     env: str = "development"
     log_level: str = "INFO"
