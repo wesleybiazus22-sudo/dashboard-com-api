@@ -67,31 +67,52 @@ _DIAS_SEMANA_PT = [
 ]
 
 
-def _montar_system_prompt() -> str:
+def _primeiro_nome_lead(nome_completo: str | None) -> str | None:
+    if nome_completo and nome_completo.strip():
+        return nome_completo.strip().split()[0].capitalize()
+    return None
+
+
+def _montar_system_prompt(nome_lead: str | None = None) -> str:
     """Monta o system prompt com a data/hora ATUAL embutida -- sem isso o
     modelo nao tem como saber que dia e hoje pra calcular "amanha de manha"
     etc de forma confiavel na hora de preencher `horario_iso` em
     `confirmar_reuniao`. Nome do dia da semana escrito na mao (nao via
     `%A`) porque isso depende do locale do sistema operacional, que aqui
-    fica em ingles por padrao."""
+    fica em ingles por padrao.
+
+    `nome_lead` (primeiro nome, ja extraido) personaliza a conversa -- sem
+    isso o modelo nao tem como saber com quem esta falando fora do template
+    de abertura (que usa o nome direto, sem passar pelo LLM)."""
     agora = datetime.now(_FUSO_BRASIL)
     dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+    linha_nome = (
+        f'\nVocê está falando com {nome_lead}. Use o nome dele de vez em quando, com naturalidade -- não em toda mensagem, isso soa forçado.'
+        if nome_lead else ""
+    )
     return f"""Você é {NOME_AGENTE}, o agente de vendas da Máquina.ISP -- uma solução de agentes de IA para provedores de internet (ISPs). Você atende pelo WhatsApp leads que chegaram através de anúncio ou do site, interessados em conhecer o produto.
 
-Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.
+Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}
 
 SEU OBJETIVO: conduzir a conversa até o lead confirmar um horário de reunião/demonstração. Você não fecha venda por texto -- o objetivo é a reunião marcada, não o contrato assinado.
 
 COMO SE COMPORTAR:
-- Tom direto, humano, consultivo -- nunca robótico nem com resposta de manual. Mensagem curta DE VERDADE: 2 a 4 linhas, como alguém digitando rápido no celular. Nunca liste passo a passo numerado nem escreva em blocos tipo e-mail/apresentação -- se a explicação for grande, resuma o essencial numa frase e ofereça mais detalhe SE o lead pedir, em vez de despejar tudo de uma vez.
+- Tom direto, humano, consultivo -- nunca robótico nem com resposta de manual. Nunca liste passo a passo numerado nem escreva em blocos tipo e-mail/apresentação -- se a explicação for grande, resuma o essencial e ofereça mais detalhe SE o lead pedir, em vez de despejar tudo de uma vez.
+- REGRA DE FORMATO OBRIGATÓRIA (não é sugestão de estilo, é formatação que você deve seguir sempre): cada parágrafo tem no máximo 1-2 frases curtas. Sempre que a resposta tiver mais de uma ideia (ex: uma explicação + uma pergunta, ou responder um ponto e puxar outro assunto -- o caso mais comum), quebre em parágrafos separados por uma linha em branco entre eles (o texto deve ter \n\n entre os parágrafos). NUNCA amontoe duas ideias no mesmo parágrafo, mesmo que o texto total seja curto -- isso vale mais do que o número total de linhas da mensagem. Pense em 2-3 balões curtos e separados no WhatsApp, não um texto corrido de uma vez. Exemplo de formatação CERTA (repare a linha em branco entre cada ideia):
+"Basicamente: são agentes de IA que cuidam de venda, cobrança, atendimento e retenção do seu provedor, direto no ERP/CRM que você já usa.
+
+Funciona 24h, sem precisar trocar de sistema.
+
+Me conta: quantos assinantes vocês têm hoje, e qual ERP usam?"
+Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça isso): "Basicamente: são agentes de IA que cuidam de venda, cobrança, atendimento e retenção do seu provedor, direto no ERP/CRM que você já usa. Funciona 24h, sem precisar trocar de sistema. Me conta: quantos assinantes vocês têm hoje, e qual ERP usam?"
+- ENTENDA O CENÁRIO ANTES DE EMPURRAR PRODUTO OU REUNIÃO: assim que o lead disser que quer saber mais (a primeira resposta de verdade da conversa), pergunte -- numa pergunta só, natural, sem parecer formulário -- quantos assinantes o provedor tem e qual ERP/sistema usa, ANTES de espichar o pitch do produto ou propor horário. Isso faz cada resposta seguinte (inclusive o convite pra reunião, quando chegar a hora) soar sob medida pro provedor dele, não um discurso pronto que serviria pra qualquer um.
 - Use a ferramenta `consultar_base_conhecimento` sempre que precisar de um fato sobre o produto (o que cada agente faz, como funciona a implementação, integrações, teste grátis, etc.) antes de responder -- nunca invente ou "chute" uma informação sobre o produto.
 - Se a base de conhecimento não trouxer a resposta pra alguma pergunta, admita com naturalidade que vai confirmar, e chame `encaminhar_para_humano`. Não invente.
 - REGRA INEGOCIÁVEL: você NUNCA informa, estima ou sugere um valor de mensalidade/preço, mesmo que o lead insista, peça "só uma faixa", ou diga que só decide sabendo o preço. Toda vez que o lead tocar em preço/valor/desconto/condição de pagamento: (1) diga com naturalidade que o valor é justamente o que se esclarece NA REUNIÃO com um consultor, olhando o tamanho e o cenário do provedor dele -- não é algo que se define por mensagem; (2) pode adiantar que tem 60 dias de teste sem custo de implementação; (3) chame `encaminhar_para_humano`; e (4) use isso como o gancho natural pra propor a reunião (ou reforçar a que já foi proposta) -- a reunião não é uma coisa separada de "alguém vai te chamar", ela É onde a resposta de preço está. Nunca deixe a pergunta de preço "no ar" tipo só "vou chamar o time comercial" sem amarrar isso à reunião.
-- FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule direto pra segunda sem passar pela primeira: (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse` e proponha ativamente horários (ex: "amanhã de manhã ou à tarde funciona melhor pra você?"); (2) SÓ quando o lead confirmar um horário específico (dia e período/hora), chame `confirmar_reuniao` com esse horário exato.
+- FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule direto pra segunda sem passar pela primeira, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse` e proponha ativamente horários (ex: "amanhã de manhã ou à tarde funciona melhor pra você?"); (2) SÓ quando o lead confirmar um horário específico (dia e período/hora), chame `confirmar_reuniao` com esse horário exato.
 - Nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
-- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido manhã/tarde antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou "manhã ou tarde funciona melhor?" de novo -- tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
+- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido manhã/tarde antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou "manhã ou tarde funciona melhor?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário -- não `confirmar_reuniao` de novo.
-- Pode fazer perguntas leves de qualificação (quantos assinantes tem o provedor, qual ERP usa) pra a reunião já chegar com contexto, mas sem parecer um formulário.
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não pergunte "manhã ou tarde?" de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
 
 
@@ -606,6 +627,39 @@ def _texto_sem_repeticao(blocos: list[str]) -> str:
     return "\n\n".join(blocos_finais)
 
 
+def _quebrar_em_paragrafos(texto: str) -> str:
+    """Reagrupa o texto final em parágrafos curtos com linha em branco entre
+    eles -- rede de segurança MECÂNICA pra regra de formato do prompt (ver
+    `_montar_system_prompt`). Testado e confirmado: mesmo com a regra descrita
+    como obrigatória + exemplo certo/errado explícito no prompt, o modelo
+    continua devolvendo o texto todo num parágrafo só na maioria das vezes --
+    mesmo padrão do que já acontecia com a regra de não repetir pergunta
+    (ver `_texto_sem_repeticao`), então tratamos aqui em vez de insistir só
+    no prompt.
+
+    Ignora qualquer quebra de linha que já exista (trata o texto todo como
+    uma sequência única de frases) e reagrupa: a última pergunta da mensagem
+    (e qualquer frase depois dela) sempre fica num parágrafo próprio -- é o
+    padrão mais comum (explicação + pergunta de fechamento); as frases
+    anteriores são agrupadas de 2 em 2. Mensagem com 2 frases ou menos não é
+    mexida (já é curta o suficiente pra não precisar de quebra)."""
+    frases = [f.strip() for f in re.split(r"(?<=[.?!])\s+", texto.replace("\n", " ")) if f.strip()]
+    if len(frases) <= 2:
+        return " ".join(frases)
+
+    indices_pergunta = [i for i, f in enumerate(frases) if f.endswith("?")]
+    if indices_pergunta:
+        corte = indices_pergunta[-1]
+        corpo, final = frases[:corte], frases[corte:]
+    else:
+        corpo, final = frases, []
+
+    paragrafos = [" ".join(corpo[i:i + 2]) for i in range(0, len(corpo), 2)]
+    if final:
+        paragrafos.append(" ".join(final))
+    return "\n\n".join(p for p in paragrafos if p)
+
+
 def conversar(
     db: Session,
     historico: list[dict],
@@ -614,6 +668,7 @@ def conversar(
     telefone: str | None = None,
     deal_rd_id: str | None = None,
     modo_teste: bool = False,
+    nome_lead: str | None = None,
 ) -> tuple[str, list[dict]]:
     """Roda um turno de conversa: adiciona `mensagem` ao `historico`, chama o
     Claude (repetindo o loop enquanto ele pedir ferramenta), devolve
@@ -622,8 +677,11 @@ def conversar(
     `historico` e `historico_atualizado` são listas de dicts 100% serializáveis
     em JSON -- guarde e reenvie a cada turno pra manter o contexto da conversa
     (ver `scripts/conversar_com_agente.py` pra um exemplo de uso turno a turno).
-    """
+
+    `nome_lead` (nome completo, opcional) personaliza o system prompt -- ver
+    `_primeiro_nome_lead`."""
     cliente = _cliente()
+    system_prompt = _montar_system_prompt(nome_lead=_primeiro_nome_lead(nome_lead))
     mensagens = list(historico) + [{"role": "user", "content": mensagem}]
 
     # Junta o texto de TODAS as voltas do loop, nao so a ultima -- e comum o
@@ -638,7 +696,7 @@ def conversar(
         resposta = cliente.messages.create(
             model=settings.anthropic_model,
             max_tokens=1024,
-            system=_montar_system_prompt(),
+            system=system_prompt,
             tools=_TOOLS,
             messages=mensagens,
         )
@@ -673,5 +731,5 @@ def conversar(
             resultados.append({"type": "tool_result", "tool_use_id": chamada.id, "content": resultado})
         mensagens.append({"role": "user", "content": resultados})
 
-    texto_final = _texto_sem_repeticao(partes_texto)
+    texto_final = _quebrar_em_paragrafos(_texto_sem_repeticao(partes_texto))
     return texto_final, mensagens

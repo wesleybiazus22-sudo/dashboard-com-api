@@ -198,15 +198,15 @@ class Settings(BaseSettings):
     # manualmente ao marcar a reuniao no RD e a fonte de verdade -- decisao do
     # dono do produto em 2026-09-11, ver docstring do script).
     #
-    # Ate 2026-09-14 so "iniciar_atendimento_agente" foi aprovado no Meta (sem
-    # botao de confirmacao) -- usado nos 3 horarios como default ate os outros
-    # 2 (manha com botao, 1h antes) serem aprovados e trocados aqui. Vazio =
-    # aquele lembrete especifico fica desligado (nao usar .env pra isso: o cron
-    # do GitHub Actions nao repassa essas variaveis, so o valor default aqui
-    # no codigo chega la -- mesmo criterio do resto dos IDs de pipeline/etapa).
+    # Os 3 aprovados no Meta em 2026-09-14 -- "confirmar_agenda_manha" tem os
+    # botoes de confirmacao ("Confirmar presença" / "Preciso remarcar"), os
+    # outros dois sao so texto de lembrete. Vazio = aquele lembrete especifico
+    # fica desligado (nao usar .env pra isso: o cron do GitHub Actions nao
+    # repassa essas variaveis, so o valor default aqui no codigo chega la --
+    # mesmo criterio do resto dos IDs de pipeline/etapa).
     whatsapp_agent_reminder_template_vespera: str = "iniciar_atendimento_agente"
-    whatsapp_agent_reminder_template_manha: str = "iniciar_atendimento_agente"
-    whatsapp_agent_reminder_template_1h_antes: str = "iniciar_atendimento_agente"
+    whatsapp_agent_reminder_template_manha: str = "confirmar_agenda_manha"
+    whatsapp_agent_reminder_template_1h_antes: str = "confirmar_agenda_1hora_antes"
 
     # Idioma cadastrado no Meta pros templates de lembrete acima -- CONFIRME
     # contra o Gerenciador de Modelos antes de mudar. O primeiro template

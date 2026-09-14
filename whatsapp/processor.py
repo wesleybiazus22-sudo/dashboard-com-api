@@ -286,8 +286,19 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
 
         historico = _carregar_historico(db, phone_number, exceto_wamid=wamid_recebido)
         deal_rd_id = deal.rd_id if deal else None
+
+        # Nome do CRM (ja usado no template de abertura) e mais confiavel que
+        # o nome de perfil do WhatsApp (`contact_name`, que o proprio dono do
+        # numero escolhe e pode ser apelido/emoji/nome de empresa) -- prioriza
+        # o CRM, cai pro perfil do WhatsApp so quando nao ha negociacao ainda.
+        nome_lead = contact_name
+        if deal and deal.contact_rd_id:
+            contato_crm = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
+            if contato_crm and contato_crm.name:
+                nome_lead = contato_crm.name
+
         resposta, _ = conversar(
-            db, historico, texto, telefone=phone_number, deal_rd_id=deal_rd_id, modo_teste=False,
+            db, historico, texto, telefone=phone_number, deal_rd_id=deal_rd_id, modo_teste=False, nome_lead=nome_lead,
         )
         if not resposta:
             logger.warning("Agente: resposta vazia pro numero %s -- nada enviado.", phone_number)
