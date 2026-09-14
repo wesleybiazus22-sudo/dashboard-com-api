@@ -81,11 +81,10 @@ def criar_tarefa(
 def atualizar_prazo_tarefa(db: Session, task_rd_id: str, *, prazo: datetime) -> dict:
     """Atualiza o `due_date` de uma tarefa ja existente -- usado pra reagendar
     a reuniao (`reagendar_reuniao` em ingestion/llm/agent.py) sem criar uma
-    tarefa duplicada. Mesmo formato de PUT ja validado em
-    `mover_negociacao_para_etapa`, mas o endpoint /tasks/{id} em si ainda NAO
-    foi testado contra a API real (so /deals/{id} e POST /tasks foram) -- se
-    a Automacao de lembrete comecar a falhar em reagendamento, confirme o
-    formato exato da resposta aqui primeiro."""
+    tarefa duplicada. VALIDADO contra a API real em 2026-09-14: lead pediu
+    reagendamento numa conversa de verdade, o agente chamou essa funcao, e o
+    `due_date` da tarefa foi conferido direto na API do RD (GET /tasks/{id})
+    mostrando o novo horario certinho."""
     if prazo.tzinfo is None:
         raise ValueError("`prazo` precisa ser timezone-aware (ex: datetime com tzinfo=timezone.utc ou zoneinfo).")
     client = RDCrmClient(db)

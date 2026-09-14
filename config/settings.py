@@ -196,12 +196,25 @@ class Settings(BaseSettings):
     # negociacao do pipeline acima com uma tarefa tipo 'meeting' aberta e
     # due_at no futuro, trafego pago ou nao (o due_at que a SDR ja preenche
     # manualmente ao marcar a reuniao no RD e a fonte de verdade -- decisao do
-    # dono do produto em 2026-09-11, ver docstring do script). So a mensagem da
-    # manha tem botao de confirmacao; as outras duas sao so texto de lembrete.
-    # Vazio (default) = aquele lembrete especifico fica desligado.
-    whatsapp_agent_reminder_template_vespera: str = ""
-    whatsapp_agent_reminder_template_manha: str = ""
-    whatsapp_agent_reminder_template_1h_antes: str = ""
+    # dono do produto em 2026-09-11, ver docstring do script).
+    #
+    # Ate 2026-09-14 so "iniciar_atendimento_agente" foi aprovado no Meta (sem
+    # botao de confirmacao) -- usado nos 3 horarios como default ate os outros
+    # 2 (manha com botao, 1h antes) serem aprovados e trocados aqui. Vazio =
+    # aquele lembrete especifico fica desligado (nao usar .env pra isso: o cron
+    # do GitHub Actions nao repassa essas variaveis, so o valor default aqui
+    # no codigo chega la -- mesmo criterio do resto dos IDs de pipeline/etapa).
+    whatsapp_agent_reminder_template_vespera: str = "iniciar_atendimento_agente"
+    whatsapp_agent_reminder_template_manha: str = "iniciar_atendimento_agente"
+    whatsapp_agent_reminder_template_1h_antes: str = "iniciar_atendimento_agente"
+
+    # Idioma cadastrado no Meta pros templates de lembrete acima -- CONFIRME
+    # contra o Gerenciador de Modelos antes de mudar. O primeiro template
+    # aprovado (2026-09-14) ficou registrado como "en" (ingles), mesmo com o
+    # corpo em portugues -- selecao de idioma na hora de submeter no Meta,
+    # nao afeta o texto exibido. Mandar com o language_code errado faz a API
+    # recusar o envio.
+    whatsapp_agent_reminder_template_language: str = "en"
 
     # App
     env: str = "development"

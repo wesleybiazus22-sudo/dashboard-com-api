@@ -69,6 +69,7 @@ def _enviar_lembrete(db, *, deal: CrmDeal, telefone: str, nome: str, data_fmt: s
         resposta = WhatsappClient().send_template(
             to=telefone,
             template_name=template_name,
+            language_code=settings.whatsapp_agent_reminder_template_language,
             components=[{
                 "type": "body",
                 "parameters": [

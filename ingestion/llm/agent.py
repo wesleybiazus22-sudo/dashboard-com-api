@@ -473,18 +473,56 @@ def _palavras_significativas(frase: str) -> set[str]:
     return {p for p in re.findall(r"[a-z0-9]+", sem_acento.lower()) if len(p) > 2}
 
 
+# Gatilho de frase de CONFIRMACAO (ver segundo sinal de `_texto_sem_repeticao`
+# logo abaixo) -- palavras que tipicamente aparecem quando o modelo esta
+# declarando "isso ja esta certo/feito", nao perguntando nem explicando algo
+# novo.
+_PALAVRAS_CONFIRMACAO = {
+    "combinado", "confirmado", "confirmada", "certo", "pronto", "marcado",
+    "marcada", "fechado", "fechada", "mantida", "mantido", "reagendado",
+    "reagendada", "agendado", "agendada", "tudo",
+}
+_DIAS_SEMANA_SEM_ACENTO = {"segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"}
+
+
+def _horario_mencionado(palavras: set[str]) -> set[str]:
+    """Extrai, de um conjunto de palavras ja normalizadas (ver
+    `_palavras_significativas`), so os tokens que parecem se referir a um
+    horario/dia especifico (ex: "15h", "hoje", "amanha", "sexta") -- usado
+    pra achar duplicacao que o Jaccard de `_texto_sem_repeticao` sozinho NAO
+    pega: duas frases com palavras bem diferentes que ainda assim confirmam
+    o MESMO horario duas vezes (ex: "combinado, mantida pra hoje às 15h" e,
+    logo depois, "tudo certo, marcado pra hoje às 15h" -- so 3 das 9 palavras
+    unicas se repetem, Jaccard 0.33, mas e a mesma confirmacao duas vezes)."""
+    return {p for p in palavras if re.fullmatch(r"\d{1,2}h\d{0,2}", p) or p in ({"hoje", "amanha"} | _DIAS_SEMANA_SEM_ACENTO)}
+
+
 def _texto_sem_repeticao(blocos: list[str]) -> str:
     """Junta os blocos de texto do turno (ver docstring de `conversar`) podando
-    sentenca que repete uma pergunta/frase ja dita antes NO MESMO turno --
-    mesmo parafraseada (ex: "bora marcar? manhã ou tarde funciona melhor?" e
-    depois "fechamos um horário? amanhã de manhã ou à tarde é melhor?" sao a
-    MESMA pergunta com palavras diferentes). O prompt ja pede pro modelo nao
-    fazer isso (ver `_montar_system_prompt`), mas na pratica ainda escapa --
-    sobretudo quando ha chamada de ferramenta no meio do turno, cada volta do
-    loop escreve como se fosse a unica parte da resposta. Comparacao por
-    sobreposicao de palavras (Jaccard >= 0.6), nao string exata, pra pegar
-    parafrase e nao so repeticao literal."""
+    sentenca que repete uma pergunta/frase/confirmacao ja feita antes NO MESMO
+    turno -- mesmo parafraseada. O prompt ja pede pro modelo nao fazer isso
+    (ver `_montar_system_prompt`), mas na pratica ainda escapa -- sobretudo
+    quando ha chamada de ferramenta no meio do turno (o modelo confirma ANTES
+    de chamar a ferramenta, "vai dar certo", e confirma DE NOVO depois de ver
+    o resultado -- duas frases com vocabulario bem diferente, mesmo horario).
+
+    Dois sinais de duplicata, cada um pega um padrao que o outro perde:
+    1. CONTENCAO de palavras (|intersecao| / |menor conjunto| >= 0.7) -- pega
+       repeticao/parafrase proxima, mesmo quando uma das frases tem "recheio"
+       extra em volta do miolo repetido (ex: "Amanhã de manhã ou à tarde
+       funciona melhor?" vs "Enquanto isso, me diz: amanhã de manhã ou à
+       tarde fica melhor pra essa reunião?" -- a segunda tem varias palavras
+       a mais, o que derrubaria um Jaccard tradicional pra bem abaixo de
+       qualquer limite razoavel mesmo sendo a MESMA pergunta; contencao mede
+       o quanto do conjunto MENOR esta contido no outro, robusto a isso).
+    2. Mesmo horario/dia mencionado (`_horario_mencionado`) numa frase que
+       tambem tem cara de confirmacao (`_PALAVRAS_CONFIRMACAO`) -- pega
+       confirmacao duplicada com vocabulario bem diferente (caso do
+       reagendamento acima: "combinado, mantida pra hoje às 15h" vs "tudo
+       certo, marcado pra hoje às 15h" -- so 3 de 9 palavras unicas em comum,
+       nenhuma metrica de sobreposicao pura pegaria isso)."""
     vistas: list[set[str]] = []
+    horarios_confirmados: list[set[str]] = []
     blocos_finais: list[str] = []
     for bloco in blocos:
         bloco = bloco.strip()
@@ -496,14 +534,18 @@ def _texto_sem_repeticao(blocos: list[str]) -> str:
             if not frase:
                 continue
             palavras = _palavras_significativas(frase)
-            duplicada = bool(palavras) and any(
-                anterior and len(palavras & anterior) / len(palavras | anterior) >= 0.6
+            duplicada_por_contencao = bool(palavras) and any(
+                anterior and len(palavras & anterior) / min(len(palavras), len(anterior)) >= 0.7
                 for anterior in vistas
             )
-            if duplicada:
+            horario = _horario_mencionado(palavras) if palavras & _PALAVRAS_CONFIRMACAO else set()
+            duplicada_por_horario = bool(horario) and horario in horarios_confirmados
+            if duplicada_por_contencao or duplicada_por_horario:
                 continue
             frases_mantidas.append(frase)
             vistas.append(palavras)
+            if horario:
+                horarios_confirmados.append(horario)
         if frases_mantidas:
             blocos_finais.append(" ".join(frases_mantidas))
     return "\n\n".join(blocos_finais)
