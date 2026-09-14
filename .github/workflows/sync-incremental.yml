@@ -62,3 +62,15 @@ jobs:
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
           GA4_SERVICE_ACCOUNT_JSON: ${{ secrets.GA4_SERVICE_ACCOUNT_JSON }}
         run: python -m ingestion.sync_all incremental
+
+      # Roda logo DEPOIS da sincronizacao, no MESMO job -- garante por
+      # construcao que o contato ja esta sincronizado quando este script
+      # verifica quem ainda nao recebeu o primeiro contato do agente. Fecha a
+      # corrida em que o webhook da negociacao chega no Render antes do
+      # contato sincronizar (ver docstring do script).
+      - name: Reprocessar leads de trafego pago sem primeiro contato
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+        run: python -m scripts.reprocessar_leads_trafego_pago
