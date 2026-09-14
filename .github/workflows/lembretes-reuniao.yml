@@ -1,16 +1,13 @@
 name: Lembretes de reuniao (Maquina ISP)
 
-# Mesmo criterio do sync-incremental.yml: roda dentro do proprio runner (fala
-# direto com o Postgres e a WhatsApp Cloud API), em vez de depender de um
-# endpoint no Render -- sem risco de cold start ou de BackgroundTask morta no
-# meio do envio.
+# Agendamento automatico (`schedule`) DESATIVADO em 2026-09-14 -- migrado pra
+# Azure Functions (ver function_app.py::lembretes_reuniao). Motivo: repositorio
+# privado no GitHub Free tem so 2.000 min gratis de Actions/mes; 2 crons de 15
+# em 15 min estouraram isso em ~2 semanas, e sem spending limit configurado o
+# GitHub parou de criar novos runs em SILENCIO (sem erro, sem run vermelho).
+# Fica so `workflow_dispatch` pra rodar manualmente sem custo automatico.
 
 on:
-  schedule:
-    # A cada 15 min. Agendador "melhor esforco" do GitHub -- atraso ocasional
-    # e coberto pela tolerancia de +-10min de cada janela de lembrete (ver
-    # scripts/enviar_lembretes_reuniao.py).
-    - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
 concurrency:

@@ -11,5 +11,11 @@ venv/
 .streamlit/secrets.toml
 *.log
 
+# Azure Functions -- segredos locais (nunca comitar), pasta de build/publish.
+local.settings.json
+.python_packages/
+bin/
+obj/
+
 # Scripts descartaveis de exploracao/diagnostico -- nao fazem parte do projeto.
 .tmp_explore/

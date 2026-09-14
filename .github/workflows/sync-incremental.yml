@@ -13,12 +13,15 @@ name: Sincronizacao incremental RD CRM
 # Rodando aqui, a sincronizacao fala direto com o Postgres e o job so termina quando
 # ela termina de verdade -- e falha visivelmente se algo der errado.
 
+# Agendamento automatico (`schedule`) DESATIVADO em 2026-09-14 -- migrado pra
+# Azure Functions (ver function_app.py::sync_e_reprocessar_leads). Motivo:
+# repositorio privado no GitHub Free tem so 2.000 min gratis de Actions/mes;
+# 2 crons de 15 em 15 min estouraram isso em ~2 semanas, e sem spending limit
+# configurado o GitHub parou de criar novos runs em SILENCIO (sem erro, sem
+# run vermelho). Fica so `workflow_dispatch` pra rodar manualmente sem custo
+# automatico.
+
 on:
-  schedule:
-    # A cada 15 min. O agendador do GitHub e "melhor esforco": sob carga o disparo
-    # atrasa alguns minutos. Como a sincronizacao e incremental e idempotente
-    # (`sync_state` guarda o ultimo ponto), atraso so adia dados -- nao duplica nada.
-    - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
 # Duas rodadas simultaneas competiriam pelo mesmo `sync_state` e pelo refresh do

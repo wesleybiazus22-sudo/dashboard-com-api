@@ -1,0 +1,18 @@
+.git*
+.vscode
+local.settings.json
+test
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+
+# App do Streamlit e assets nao usados pelos jobs agendados -- corta o
+# pacote de deploy (a Azure Function so precisa de ingestion/, scripts/,
+# database/, config/, webhooks/, whatsapp/).
+app/
+data/
+.streamlit/
+.devcontainer/
+.github/
+README.md

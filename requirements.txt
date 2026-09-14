@@ -3,7 +3,7 @@
 # (streamlit/plotly/pandas) vivem aqui junto com as da API, em vez de num arquivo
 # separado que o Cloud simplesmente ignoraria.
 
-# --- API + ingestao (Render, GitHub Actions) ---
+# --- API + ingestao (Render, Azure Functions) ---
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 httpx==0.27.2
@@ -14,6 +14,9 @@ python-dotenv==1.0.1
 tenacity==9.0.0
 google-auth==2.35.0
 anthropic==1.4.0
+
+# --- Jobs agendados (Azure Functions -- ver function_app.py) ---
+azure-functions==2.3.0
 
 # --- Dashboard (Streamlit Community Cloud) ---
 streamlit==1.39.0
