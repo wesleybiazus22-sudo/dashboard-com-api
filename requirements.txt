@@ -2,6 +2,13 @@
 # obrigatoriamente o requirements.txt da RAIZ -- por isso as libs do dashboard
 # (streamlit/plotly/pandas) vivem aqui junto com as da API, em vez de num arquivo
 # separado que o Cloud simplesmente ignoraria.
+#
+# NAO adicionar "azure-functions" aqui -- ja quebrou o deploy do Streamlit Cloud
+# uma vez (2026-09-14). A Azure Function (function_app.py) tambem precisa de um
+# requirements.txt no mesmo diretorio do host.json pra funcionar, o que colide
+# com essa mesma restricao do Streamlit -- ainda sem solucao definitiva (ver
+# docstring de function_app.py). Resolver quando o Function App for criado de
+# verdade no Azure, testando contra o deploy real em vez de adivinhar.
 
 # --- API + ingestao (Render, Azure Functions) ---
 fastapi==0.115.0
@@ -14,9 +21,6 @@ python-dotenv==1.0.1
 tenacity==9.0.0
 google-auth==2.35.0
 anthropic==1.4.0
-
-# --- Jobs agendados (Azure Functions -- ver function_app.py) ---
-azure-functions==2.3.0
 
 # --- Dashboard (Streamlit Community Cloud) ---
 streamlit==1.39.0
