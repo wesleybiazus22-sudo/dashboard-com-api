@@ -22,8 +22,10 @@ agente) -- poucas ferramentas, bem definidas:
   - reagendar_reuniao: o lead JA TEM reuniao marcada e pede pra mudar
     dia/horario (inclusive respondendo a um lembrete automatico). Atualiza
     `due_at` da tarefa tipo 'meeting' no RD (fonte de verdade lida por
-    scripts/enviar_lembretes_reuniao.py) -- NAO mexe no evento do Microsoft
-    Graph, so cria uma tarefa avisando um humano pra ajustar o Outlook/Teams.
+    scripts/enviar_lembretes_reuniao.py) e, se a reuniao original foi criada
+    por este agente (tem evento registrado em AgendaEventoMicrosoft), move o
+    evento DE VERDADE no Outlook/Teams. Reuniao marcada manualmente pela SDR
+    (sem evento registrado) cai no fallback de avisar um humano pra ajustar.
   - encaminhar_para_humano: qualquer coisa que o agente NAO deve decidir
     sozinho -- acima de tudo, negociacao de preco/desconto (regra explicita
     do dono do produto: o agente nunca inventa nem estima mensalidade).
@@ -47,7 +49,7 @@ import anthropic
 from sqlalchemy.orm import Session
 
 from config.settings import settings
-from database.models import CrmContact, CrmDeal, CrmTask, CrmUser
+from database.models import AgendaEventoMicrosoft, CrmContact, CrmDeal, CrmTask, CrmUser
 from ingestion.llm.pricing import registrar_chamada
 from ingestion.llm.retrieval import buscar_contexto, montar_bloco_contexto
 from ingestion.rd_crm.actions import atualizar_prazo_tarefa, criar_tarefa, mover_negociacao_para_etapa
@@ -308,9 +310,54 @@ def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, hor
             participantes=participantes or None,
             corpo=f"Reunião marcada automaticamente pelo agente {NOME_AGENTE}.<br>{resumo}",
         )
+
+        # Guarda o ID do evento pra `reagendar_reuniao` conseguir mover ele de
+        # verdade depois -- sem isso nao ha como reencontrar o evento no Graph
+        # a partir so do deal_rd_id.
+        evento_id = evento.get("id")
+        if evento_id:
+            registro = db.query(AgendaEventoMicrosoft).filter(AgendaEventoMicrosoft.deal_rd_id == deal_rd_id).one_or_none()
+            if registro is None:
+                registro = AgendaEventoMicrosoft(deal_rd_id=deal_rd_id)
+                db.add(registro)
+            registro.email_organizador = owner.email
+            registro.evento_id = evento_id
+            registro.web_link = evento.get("webLink")
+            registro.atualizado_em = datetime.now(timezone.utc)
+            db.commit()
+
         return (evento.get("onlineMeeting") or {}).get("joinUrl")
     except Exception:  # noqa: BLE001 -- fallback pra tarefa manual, nunca quebra a conversa
         return None
+
+
+def _mover_evento_na_agenda(db: Session, *, deal_rd_id: str, novo_horario_iso: str) -> bool:
+    """Tenta mover DE VERDADE o evento do Microsoft Graph que
+    `_criar_evento_na_agenda` criou (achado via `AgendaEventoMicrosoft`, pelo
+    ID guardado na criacao). Devolve True se moveu, False se nao ha evento
+    registrado pra essa negociacao (ex: reuniao marcada manualmente pela SDR,
+    sem integracao) ou se a chamada falhou -- nesses casos quem chama cai no
+    fallback de avisar um humano pra ajustar manualmente."""
+    registro = db.query(AgendaEventoMicrosoft).filter(AgendaEventoMicrosoft.deal_rd_id == deal_rd_id).one_or_none()
+    if not registro:
+        return False
+    try:
+        inicio = datetime.fromisoformat(novo_horario_iso)
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=_FUSO_BRASIL)
+        fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
+
+        from ingestion.microsoft.client import MicrosoftCalendarClient
+
+        MicrosoftCalendarClient().atualizar_evento(
+            email_organizador=registro.email_organizador, evento_id=registro.evento_id, inicio=inicio, fim=fim,
+        )
+        registro.atualizado_em = datetime.now(timezone.utc)
+        db.commit()
+        return True
+    except Exception:  # noqa: BLE001 -- fallback pra tarefa manual, nunca quebra a conversa
+        logger.exception("Agente: falha ao mover evento do Graph pra negociação %s.", deal_rd_id)
+        return False
 
 
 def _executar_ferramenta(
@@ -434,10 +481,14 @@ def _executar_ferramenta(
 
         # A tarefa em si (crm_tasks.due_at) e a fonte de verdade lida pelos
         # lembretes automaticos -- atualizando ela, o proximo ciclo de lembrete
-        # ja passa a valer pro novo horario sozinho. NAO mexe no evento do
-        # Microsoft Graph (se a reuniao original foi criada por confirmar_reuniao):
-        # isso ainda depende de um humano ajustar o Outlook, ver aviso abaixo.
-        if owner and _pode_usar_calendario():
+        # ja passa a valer pro novo horario sozinho. Se a reuniao original foi
+        # criada por `confirmar_reuniao` (tem evento registrado em
+        # AgendaEventoMicrosoft), move o evento DE VERDADE no Outlook/Teams;
+        # senao (ex: reuniao marcada manualmente pela SDR), cai no fallback de
+        # avisar um humano pra ajustar.
+        evento_movido = _mover_evento_na_agenda(db, deal_rd_id=deal_rd_id, novo_horario_iso=novo_horario_iso)
+
+        if owner and _pode_usar_calendario() and not evento_movido:
             criar_tarefa(
                 db, deal_rd_id, tipo="task",
                 texto=f"Reunião reagendada pelo agente {NOME_AGENTE} pra {novo_horario_iso} -- "
@@ -446,7 +497,11 @@ def _executar_ferramenta(
                 prazo=datetime.now(timezone.utc) + timedelta(hours=1),
             )
 
-        return "Reunião reagendada com sucesso no CRM."
+        return (
+            "Reunião reagendada com sucesso -- CRM e o evento no Outlook/Teams já atualizados."
+            if evento_movido
+            else "Reunião reagendada com sucesso no CRM."
+        )
 
     if nome == "encaminhar_para_humano":
         motivo = entrada.get("motivo", "")

@@ -123,3 +123,14 @@ class MicrosoftCalendarClient:
                 {"emailAddress": {"address": email}, "type": "required"} for email in participantes
             ]
         return self._request("POST", f"/users/{email_organizador}/events", json=payload)
+
+    def atualizar_evento(self, *, email_organizador: str, evento_id: str, inicio: datetime, fim: datetime) -> dict:
+        """Move um evento ja existente pro novo horario (PATCH -- so manda os
+        campos que mudam, o Teams/link/convidados continuam os mesmos). Usado
+        por `reagendar_reuniao` (ver ingestion/llm/agent.py) quando o lead
+        pede pra remarcar uma reuniao que o agente mesmo criou."""
+        payload = {
+            "start": {"dateTime": inicio.isoformat(), "timeZone": _FUSO},
+            "end": {"dateTime": fim.isoformat(), "timeZone": _FUSO},
+        }
+        return self._request("PATCH", f"/users/{email_organizador}/events/{evento_id}", json=payload)

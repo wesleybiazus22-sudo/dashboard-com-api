@@ -444,6 +444,25 @@ class CrmMeeting(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class AgendaEventoMicrosoft(Base):
+    """1 linha por negociacao com evento criado no Microsoft Graph por
+    `_criar_evento_na_agenda` (ver ingestion/llm/agent.py) -- guarda o ID do
+    evento pra `reagendar_reuniao` conseguir mover o evento DE VERDADE no
+    Outlook/Teams quando o lead pede pra remarcar, em vez de so avisar um
+    humano pra ajustar manualmente. Sem essa tabela nao ha como reencontrar
+    o evento depois de criado (a API do Graph nao devolve isso pelo
+    deal_rd_id, so pelo proprio ID que ela gerou na criacao)."""
+
+    __tablename__ = "agenda_eventos_microsoft"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    deal_rd_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    email_organizador: Mapped[str] = mapped_column(String, nullable=False)
+    evento_id: Mapped[str] = mapped_column(String, nullable=False)
+    web_link: Mapped[str | None] = mapped_column(String, nullable=True)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class AgenteLembreteReuniao(Base):
     """Controla os 3 lembretes automaticos (vespera 20h, manha 08h, 1h antes)
     de uma reuniao marcada (`crm_tasks` tipo 'meeting') no pipeline [Máquina
