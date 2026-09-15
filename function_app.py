@@ -22,17 +22,18 @@ RD_CRM_REDIRECT_URI, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN. As
 demais (META_*, GA4_*) sao opcionais -- ausentes, o sync so pula essa etapa
 (ver ingestion/sync_all.py).
 
-PENDENCIA CONHECIDA (2026-09-14): a Azure Function PRECISA de "azure-functions"
-no requirements.txt do mesmo diretorio do host.json (nao e fornecido pelo
-runtime -- confirmado na documentacao oficial). Como este arquivo fica na raiz
-do repositorio, isso colidiria com o requirements.txt que o Streamlit Community
-Cloud le (e ja quebrou o deploy do dashboard uma vez, por isso "azure-functions"
-NAO esta mais no requirements.txt da raiz). Ainda falta decidir/testar a forma
-certa de dar esse pacote pro Azure sem voltar a quebrar o Streamlit -- possiveis
-caminhos: build customizado no Deployment Center que instala um requirements
-extra, ou mover host.json pra uma subpasta com deploy do repositorio inteiro
-mesmo assim. So resolver testando contra o Function App de verdade, depois que
-ele existir no Azure -- ver conversa de 2026-09-14."""
+RESOLVIDO (2026-09-14/15): a Azure Function PRECISA de "azure-functions" no
+requirements.txt que o build remoto do Azure (Oryx) usa (nao e fornecido pelo
+runtime), mas o requirements.txt da raiz do repositorio e o mesmo que o
+Streamlit Community Cloud le (e ja quebrou por causa disso uma vez). O workflow
+.github/workflows/main_func-dashboard-api-prod.yml (criado automaticamente
+pelo Azure Portal ao conectar o Deployment Center no GitHub Actions, plano
+Flex Consumption) resolve isso adicionando "azure-functions" ao
+requirements.txt SO na copia que foi feita checkout no runner do GitHub
+Actions, logo antes de zipar -- o arquivo versionado no repositorio nunca e
+alterado, entao o Streamlit Cloud continua vendo a versao limpa. Deploy usa
+sku: flexconsumption + remote-build: true (Flex Consumption nao aceita
+slot-name -- ver correcao do TI em 2026-09-15)."""
 
 import logging
 

@@ -4,11 +4,11 @@
 # separado que o Cloud simplesmente ignoraria.
 #
 # NAO adicionar "azure-functions" aqui -- ja quebrou o deploy do Streamlit Cloud
-# uma vez (2026-09-14). A Azure Function (function_app.py) tambem precisa de um
-# requirements.txt no mesmo diretorio do host.json pra funcionar, o que colide
-# com essa mesma restricao do Streamlit -- ainda sem solucao definitiva (ver
-# docstring de function_app.py). Resolver quando o Function App for criado de
-# verdade no Azure, testando contra o deploy real em vez de adivinhar.
+# uma vez (2026-09-14). A Azure Function precisa dessa lib mas ganha ela de
+# outra forma: o workflow .github/workflows/main_func-dashboard-api-prod.yml
+# adiciona azure-functions so na copia deste arquivo dentro do runner do CI,
+# logo antes de zipar pro deploy -- este arquivo versionado nunca e alterado.
+# Ver docstring de function_app.py.
 
 # --- API + ingestao (Render, Azure Functions) ---
 fastapi==0.115.0

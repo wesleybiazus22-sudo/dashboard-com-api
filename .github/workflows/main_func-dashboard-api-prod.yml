@@ -39,8 +39,11 @@ jobs:
 
       # Optional: Add step to run tests here
 
+      - name: Add azure-functions so o build remoto do Azure encontre -- so na copia zipada, nao no requirements.txt do repo (Streamlit Cloud le o mesmo arquivo)
+        run: echo "azure-functions==2.3.0" >> requirements.txt
+
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: zip release.zip ./* -r -x "app/*" -x "data/*"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -70,6 +73,7 @@ jobs:
         id: deploy-to-function
         with:
           app-name: 'func-dashboard-api-prod'
-          slot-name: 'Production'
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_8428CAC9B67D41469B9CCFBEABFEA8BC }}
+          sku: flexconsumption
+          remote-build: true
