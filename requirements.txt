@@ -4,11 +4,13 @@
 # separado que o Cloud simplesmente ignoraria.
 #
 # NAO adicionar "azure-functions" aqui -- ja quebrou o deploy do Streamlit Cloud
-# uma vez (2026-09-14). A Azure Function precisa dessa lib mas ganha ela de
-# outra forma: o workflow .github/workflows/main_func-dashboard-api-prod.yml
-# adiciona azure-functions so na copia deste arquivo dentro do runner do CI,
-# logo antes de zipar pro deploy -- este arquivo versionado nunca e alterado.
-# Ver docstring de function_app.py.
+# uma vez (2026-09-14), e o remote build da Azure Function tem timeout de 60s
+# que as libs do dashboard (streamlit/plotly/pandas) e do webhook
+# (fastapi/uvicorn) estourariam de qualquer forma. A Azure Function usa
+# requirements-azure.txt (dependencias minimas + azure-functions) -- o
+# workflow .github/workflows/main_func-dashboard-api-prod.yml troca por ele
+# SO na copia zipada, no runner do CI, sem tocar neste arquivo. Ver docstring
+# de function_app.py.
 
 # --- API + ingestao (Render, Azure Functions) ---
 fastapi==0.115.0

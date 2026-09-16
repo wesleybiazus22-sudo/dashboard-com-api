@@ -35,12 +35,12 @@ jobs:
           source venv/bin/activate
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-azure.txt
 
       # Optional: Add step to run tests here
 
-      - name: Add azure-functions so o build remoto do Azure encontre -- so na copia zipada, nao no requirements.txt do repo (Streamlit Cloud le o mesmo arquivo)
-        run: echo "azure-functions==2.3.0" >> requirements.txt
+      - name: Usar requirements enxuto no pacote zipado -- o build remoto do Azure (Flex Consumption) tem timeout de 60s, e o requirements.txt completo (fastapi/streamlit/pandas, que a Function nao usa) estourava esse limite. So mexe na copia do runner, nao no requirements.txt do repo (Streamlit Cloud le o mesmo arquivo).
+        run: cp requirements-azure.txt requirements.txt
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r -x "app/*" -x "data/*"

@@ -22,18 +22,25 @@ RD_CRM_REDIRECT_URI, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN. As
 demais (META_*, GA4_*) sao opcionais -- ausentes, o sync so pula essa etapa
 (ver ingestion/sync_all.py).
 
-RESOLVIDO (2026-09-14/15): a Azure Function PRECISA de "azure-functions" no
-requirements.txt que o build remoto do Azure (Oryx) usa (nao e fornecido pelo
-runtime), mas o requirements.txt da raiz do repositorio e o mesmo que o
-Streamlit Community Cloud le (e ja quebrou por causa disso uma vez). O workflow
-.github/workflows/main_func-dashboard-api-prod.yml (criado automaticamente
-pelo Azure Portal ao conectar o Deployment Center no GitHub Actions, plano
-Flex Consumption) resolve isso adicionando "azure-functions" ao
-requirements.txt SO na copia que foi feita checkout no runner do GitHub
-Actions, logo antes de zipar -- o arquivo versionado no repositorio nunca e
-alterado, entao o Streamlit Cloud continua vendo a versao limpa. Deploy usa
-sku: flexconsumption + remote-build: true (Flex Consumption nao aceita
-slot-name -- ver correcao do TI em 2026-09-15)."""
+RESOLVIDO (2026-09-14/16): duas pendencias encadeadas pra fazer o deploy da
+Azure Function (plano Flex Consumption) funcionar --
+
+1. Auth: o workflow que o Azure Portal criou sozinho ao conectar o Deployment
+   Center usava slot-name (nao suportado em Flex Consumption) e dava 401 no
+   Kudu. Corrigido com sku: flexconsumption + remote-build: true (correcao do
+   TI em 2026-09-15).
+
+2. Timeout do build remoto: com remote-build: true, o Azure roda "pip install"
+   remotamente a partir do requirements.txt que veio no pacote -- e o
+   requirements.txt da raiz (que o Streamlit Community Cloud tambem le, entao
+   nao pode ganhar azure-functions nem perder as libs do dashboard) tem
+   fastapi/uvicorn/streamlit/plotly/pandas que a Function nem usa. O remote
+   build do Flex Consumption tem timeout de 60s pra instalar tudo -- isso
+   estourava o limite (erro "OneDeploy"/"ZIP Deploy failed"). Resolvido com
+   requirements-azure.txt (so as libs que ingestion/, scripts/, database/ e
+   config/ realmente usam, mais azure-functions) -- o workflow troca o
+   requirements.txt pela versao enxuta SO na copia zipada, no runner do CI,
+   sem tocar no arquivo versionado."""
 
 import logging
 

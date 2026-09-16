@@ -1,0 +1,23 @@
+# Dependencias da Azure Function (jobs agendados: sync incremental do RD CRM +
+# reprocessamento de leads + lembretes de reuniao). NAO e o requirements.txt
+# da raiz porque o remote build do Azure Flex Consumption tem timeout de 60s
+# pra instalar tudo -- o requirements.txt completo (com fastapi/uvicorn do
+# webhook e streamlit/plotly/pandas do dashboard, que a Function nao usa)
+# estourava esse limite. Ver .github/workflows/main_func-dashboard-api-prod.yml
+# (troca o requirements.txt por este, so na copia zipada, antes do deploy) e
+# a docstring de function_app.py.
+#
+# Confirmado por grep (2026-09-16): nenhum modulo em ingestion/, scripts/,
+# database/ ou config/ importa pandas, streamlit, plotly, fastapi ou uvicorn
+# -- esses so aparecem em app/ (Streamlit) e api/ (FastAPI do Render), que
+# nao fazem parte deste deploy.
+
+azure-functions==2.3.0
+httpx==0.27.2
+SQLAlchemy==2.0.35
+psycopg2-binary>=2.9.10
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+tenacity==9.0.0
+google-auth==2.35.0
+anthropic==1.4.0
