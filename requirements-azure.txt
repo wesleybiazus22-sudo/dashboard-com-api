@@ -11,6 +11,16 @@
 # database/ ou config/ importa pandas, streamlit, plotly, fastapi ou uvicorn
 # -- esses so aparecem em app/ (Streamlit) e api/ (FastAPI do Render), que
 # nao fazem parte deste deploy.
+#
+# "requests" nao e importado direto por nenhum modulo nosso, mas
+# google.auth.transport.requests (usado por ingestion/ga4/client.py) precisa
+# dele -- no requirements.txt da raiz isso vinha de carona via alguma outra
+# lib (streamlit/pandas), aqui precisa estar explicito.
+#
+# "tzdata" garante a base de fusos horarios IANA (zoneinfo, usado com
+# "America/Sao_Paulo" nos lembretes) independente do SO/imagem ter isso
+# instalado no sistema -- confirmado que falta em ambiente Windows local,
+# entao nao da pra confiar que a imagem do Azure Linux tem por padrao.
 
 azure-functions==1.25.0
 httpx==0.27.2
@@ -20,4 +30,6 @@ pydantic-settings==2.5.2
 python-dotenv==1.0.1
 tenacity==9.0.0
 google-auth==2.35.0
+requests==2.32.3
 anthropic==1.4.0
+tzdata==2025.2
