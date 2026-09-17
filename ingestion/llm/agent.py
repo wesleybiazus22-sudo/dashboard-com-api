@@ -470,6 +470,15 @@ def _executar_ferramenta(
                 "[MODO TESTE -- nada foi alterado no CRM] A reunião seria reagendada pra "
                 f"{novo_horario_iso}. Resumo: {resumo}"
             )
+        if not settings.whatsapp_agent_confirmacoes_reuniao_agendada_ativas:
+            # STANDBY (ver config/settings.py) -- negociacao ja em "Reuniao Agendada"
+            # some do RD minutos depois de escrita nossa, causa ainda sob investigacao
+            # com o suporte do RD. Nao escreve nada, so avisa e escala pra humano.
+            return (
+                "[EM STANDBY -- reagendamento automatico desligado temporariamente, nada foi "
+                "alterado no CRM/agenda] Avise o lead com naturalidade que alguém do time vai "
+                "confirmar o reagendamento em breve, e chame encaminhar_para_humano."
+            )
 
         tarefa = (
             db.query(CrmTask)

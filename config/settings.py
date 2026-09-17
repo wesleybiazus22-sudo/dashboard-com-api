@@ -149,6 +149,21 @@ class Settings(BaseSettings):
     # move o card ao longo do funil). Vazio = sem checagem de etapa.
     rd_stage_primeira_conexao_rd_id: str = "687fe8cbd5677c001aa540b4"
 
+    # STANDBY (2026-09-17): negociacoes e tarefas somem do RD Station minutos
+    # depois de alguma escrita do agente pra quem ja esta em "Reuniao Agendada"
+    # (lembrete de confirmacao + resposta do lead, reagendamento) -- reproduzido
+    # varias vezes no mesmo dia, inclusive com lead real (nao so teste), e o RD
+    # nao tem log de auditoria por API pra investigar a causa. Ate isso ser
+    # esclarecido com o suporte do RD, desligado por padrao -- reativar so
+    # trocando pra True aqui (decisao deliberada em codigo, nao variavel de
+    # ambiente, pra nao reativar sem querer). Desliga DUAS coisas:
+    # scripts/enviar_lembretes_reuniao.py (nao roda nada) e a ferramenta
+    # reagendar_reuniao do agente (recusa e pede pra chamar
+    # encaminhar_para_humano). NAO afeta confirmar_reuniao (primeira marcacao),
+    # que e outra populacao de negociacao (ainda nao chegou em "Reuniao
+    # Agendada").
+    whatsapp_agent_confirmacoes_reuniao_agendada_ativas: bool = False
+
     # Etapa "Interesse Identificado" do pipeline [Máquina ISP] - Qualificação --
     # pra onde o agente move a negociacao quando o lead demonstra interesse em
     # avancar mas AINDA NAO confirmou um horario de reuniao (ver

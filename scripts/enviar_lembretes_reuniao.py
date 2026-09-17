@@ -209,6 +209,13 @@ def _marcar_no_show(db, agora: datetime) -> int:
 
 
 def main() -> None:
+    if not settings.whatsapp_agent_confirmacoes_reuniao_agendada_ativas:
+        logger.warning(
+            "Lembretes de reunião em STANDBY (ver config/settings.py) -- nada executado nessa rodada."
+        )
+        print("Em standby -- 0 lembrete(s), 0 negociação(ões) puxada(s) pra No-show.")
+        return
+
     agora = datetime.now(_FUSO)
     with session_scope() as db:
         enviados = _processar_lembretes(db, agora)
