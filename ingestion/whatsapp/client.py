@@ -28,17 +28,31 @@ def normalizar_telefone_br(numero: str | None) -> str | None:
     `+5511999998888`, `5511999998888` ou so `11999998888`, ja vistos na base
     real) pro formato que a WhatsApp Cloud API exige pra `to`: so digitos, com
     codigo do pais, sem "+". Devolve None se nao der pra confiar no numero
-    (vazio, ou tamanho fora do esperado pra Brasil)."""
+    (vazio, ou tamanho fora do esperado pra Brasil).
+
+    SEMPRE devolve 13 digitos (55 + DDD + 9 digitos, com o "9" na frente do
+    numero de celular), mesmo quando a entrada veio sem esse "9" (formato
+    legado de 12 digitos com codigo do pais, ou 10 sem) -- confirmado contra
+    producao em 2026-09-17: o `wa_id`/`from` que o Meta manda no webhook de
+    mensagem RECEBIDA as vezes vem SEM o "9" (12 digitos), enquanto o telefone
+    salvo no RD CRM (usado pra ENVIAR) vem COM o "9" (13 digitos) pro MESMO
+    numero real -- sem canonizar os dois lados pro mesmo formato, a mensagem
+    de entrada e a de saida ficavam salvas sob `phone_number` diferentes,
+    quebrando o historico da conversa e todas as travas por telefone."""
     if not numero:
         return None
     digitos = re.sub(r"\D", "", numero)
     if not digitos:
         return None
     if digitos.startswith("55") and len(digitos) in (12, 13):
-        return digitos
-    if len(digitos) in (10, 11):  # DDD + numero, sem o codigo do pais
-        return "55" + digitos
-    return None
+        ddd, resto = digitos[2:4], digitos[4:]
+    elif len(digitos) in (10, 11):  # DDD + numero, sem o codigo do pais
+        ddd, resto = digitos[:2], digitos[2:]
+    else:
+        return None
+    if len(resto) == 8:  # celular sem o "9" -- adiciona pra canonizar
+        resto = "9" + resto
+    return "55" + ddd + resto
 
 
 def _is_retryable(exc: BaseException) -> bool:

@@ -354,14 +354,20 @@ def processar_evento(db: Session, payload: dict) -> int:
                 continue
             value = change.get("value", {})
 
+            # Normaliza tanto o `wa_id` quanto o `from` -- o Meta as vezes manda o
+            # numero de celular SEM o "9" no webhook de mensagem recebida, mesmo
+            # quando o mesmo numero salvo no RD CRM (usado pra enviar) tem o "9".
+            # Sem canonizar os dois lados aqui, entrada e saida do MESMO numero
+            # real ficavam gravadas sob `phone_number` diferentes, quebrando o
+            # historico da conversa (ver docstring de `normalizar_telefone_br`).
             contatos_por_wa_id = {
-                c.get("wa_id"): (c.get("profile") or {}).get("name")
+                normalizar_telefone_br(c.get("wa_id")): (c.get("profile") or {}).get("name")
                 for c in value.get("contacts", [])
             }
 
             for mensagem in value.get("messages", []):
                 wamid = mensagem.get("id")
-                numero = mensagem.get("from")
+                numero = normalizar_telefone_br(mensagem.get("from"))
                 if not wamid or not numero:
                     continue
 
