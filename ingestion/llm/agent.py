@@ -725,9 +725,21 @@ def conversar(
 
         resultados = []
         for chamada in chamadas_ferramenta:
-            resultado = _executar_ferramenta(
-                db, chamada.name, chamada.input, telefone=telefone, deal_rd_id=deal_rd_id, modo_teste=modo_teste,
-            )
+            try:
+                resultado = _executar_ferramenta(
+                    db, chamada.name, chamada.input, telefone=telefone, deal_rd_id=deal_rd_id, modo_teste=modo_teste,
+                )
+            except Exception:  # noqa: BLE001 -- uma ferramenta falhando (ex: negociacao apagada
+                # no RD, 404) nunca pode derrubar o turno inteiro e deixar o lead sem resposta.
+                db.rollback()
+                logger.exception(
+                    "Agente: falha ao executar ferramenta %s (negociação %s).", chamada.name, deal_rd_id,
+                )
+                resultado = (
+                    "[ERRO TECNICO ao executar essa acao -- nao foi possivel confirmar no CRM/agenda agora] "
+                    "Avise o lead com naturalidade que houve um problema tecnico e que alguem vai confirmar "
+                    "em breve, e chame encaminhar_para_humano."
+                )
             resultados.append({"type": "tool_result", "tool_use_id": chamada.id, "content": resultado})
         mensagens.append({"role": "user", "content": resultados})
 
