@@ -323,9 +323,14 @@ def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, hor
             if email and email.strip().lower() != owner.email.strip().lower()
         ))
 
+        # Titulo curto de proposito ("Empresa + Maquina ISP") -- o resumo
+        # detalhado (o que o lead contou, o que ele quer ver) fica so no corpo
+        # do evento e na tarefa do CRM (ver texto_tarefa em confirmar_reuniao),
+        # nao no titulo, que ficava enorme e dificil de ler na agenda.
+        nome_cliente = (deal.name if deal and deal.name else resumo).strip()
         evento = client.criar_evento(
             email_organizador=owner.email,
-            assunto=f"Demonstração Máquina.ISP -- {resumo}"[:250],
+            assunto=f"{nome_cliente} + Máquina ISP"[:250],
             inicio=inicio,
             fim=fim,
             participantes=participantes or None,
