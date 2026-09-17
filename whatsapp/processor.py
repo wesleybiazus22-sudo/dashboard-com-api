@@ -144,17 +144,25 @@ def _deal_por_telefone(db: Session, phone_number: str) -> CrmDeal | None:
 
     Faz um scan simples em Python (nao um WHERE normalizado no SQL) -- aceitavel
     pro volume atual de contatos; se a base crescer muito, vale mover a chave
-    pra uma coluna indexada em vez de comparar em memoria."""
+    pra uma coluna indexada em vez de comparar em memoria.
+
+    O MESMO telefone pode estar cadastrado em MAIS DE UM contato no RD (visto
+    em producao em 2026-09-17: um contato de teste antigo e um contato novo
+    real com o mesmo numero, o RD nao deduplicou) -- por isso junta as
+    negociacoes de TODOS os contatos que baterem no nucleo do telefone antes
+    de escolher a mais recente, em vez de travar no primeiro contato
+    encontrado (que podia ser o errado/antigo e resolver pra uma negociacao
+    ja apagada, quebrando a conversa)."""
     alvo = _chave_telefone(phone_number)
     if not alvo:
         return None
     candidatos = db.query(CrmContact).filter(CrmContact.phone.isnot(None)).all()
-    contato = next((c for c in candidatos if _chave_telefone(c.phone) == alvo), None)
-    if not contato:
+    contatos_rd_ids = [c.rd_id for c in candidatos if _chave_telefone(c.phone) == alvo]
+    if not contatos_rd_ids:
         return None
     return (
         db.query(CrmDeal)
-        .filter(CrmDeal.contact_rd_id == contato.rd_id)
+        .filter(CrmDeal.contact_rd_id.in_(contatos_rd_ids))
         .order_by(CrmDeal.deal_created_at.desc())
         .first()
     )
