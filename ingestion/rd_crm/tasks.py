@@ -9,10 +9,14 @@ ENDPOINT = "/tasks"
 
 def sync_tasks(db: Session, updated_since: str | None = None) -> int:
     client = RDCrmClient(db)
-    # O endpoint /tasks devolve 500 com filter=updated_at:>... (mesma sintaxe que
-    # funciona em /deals, /organizations, /contacts). Ate confirmar a causa, ignoramos
-    # `updated_since` e buscamos a lista completa -- aceitavel pro volume de tarefas.
-    params = None
+    # Ate 2026-09, o endpoint /tasks devolvia 500 com filter=updated_at:>... (mesma
+    # sintaxe que funciona em /deals, /organizations, /contacts), entao ignoravamos
+    # `updated_since` e buscavamos a lista completa -- aceitavel pro volume de tarefas
+    # de entao. Confirmado em 2026-09-17 que o filtro volta 200 normalmente agora (bug
+    # do lado do RD, aparentemente corrigido) -- reativado, porque buscar tudo toda vez
+    # passou a levar ~60s por rodada (metade do tempo total do sync incremental) com o
+    # volume atual de tarefas, contra <1s com o filtro incremental de verdade.
+    params = {"filter": f"updated_at:>{updated_since}"} if updated_since else None
 
     count = 0
     for item in client.paginate(ENDPOINT, params=params):
