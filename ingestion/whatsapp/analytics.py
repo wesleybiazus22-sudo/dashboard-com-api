@@ -6,9 +6,16 @@ conta propria (tem detalhes proprios -- ex: a primeira conversa em 24h dentro
 de "atendimento" pode ser gratuita dependendo da categoria -- que mudam com
 o tempo e seriam faceis de errar).
 
-Validado contra a API real (200 OK, sintaxe correta) -- so ainda sem dado
-porque o numero e novo e nao teve conversa cobravel ainda. O formato do
-payload abaixo segue a documentacao oficial da Conversation Analytics API.
+ATENCAO (2026-09-18): sintaxe corrigida contra a documentacao oficial atual
+(developers.facebook.com/docs/graph-api/reference/whats-app-business-account/
+conversation_analytics) -- faltava o parametro `metric_types` (sem ele a API
+NAO erra, so devolve o campo vazio silenciosamente, sem `conversation_analytics`
+nenhum na resposta) e os valores de `dimensions` precisam ser MAIUSCULOS
+("PHONE", nao "phone"). Mesmo com a sintaxe corrigida e testada contra a API
+real, a resposta continua vindo vazia (so `{"id": ...}`) -- aponta pra falta
+de permissao no token (`whatsapp_business_management`, ver requisitos da API),
+nao mais um problema de sintaxe. Verificar/gerar um token com esse escopo no
+Meta Business Manager antes de assumir que esta funcionando.
 """
 
 import time
@@ -41,7 +48,8 @@ def _buscar_conversation_analytics(start: int, end: int) -> dict:
     url = f"https://graph.facebook.com/{_API_VERSION}/{settings.whatsapp_business_account_id}"
     campo = (
         f'conversation_analytics.start({start}).end({end}).granularity(DAILY)'
-        '.phone_numbers([]).dimensions(["conversation_category","conversation_type","phone"])'
+        '.metric_types(["CONVERSATION","COST"])'
+        '.dimensions(["CONVERSATION_CATEGORY","CONVERSATION_TYPE","PHONE"])'
     )
     response = httpx.get(url, params={"fields": campo, "access_token": settings.whatsapp_access_token}, timeout=30)
     if response.status_code == 429:

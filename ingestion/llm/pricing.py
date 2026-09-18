@@ -20,11 +20,18 @@ from database.models import LlmCallLog
 # USD por 1 milhao de tokens. `cache_write` e o custo de ESCREVER no cache (mais
 # caro que input normal); `cache_read` e bem mais barato que input normal --
 # e o ganho de usar prompt caching.
+#
+# Conferido contra a tabela oficial vigente em 2026-09-18 (ver
+# https://www.anthropic.com/pricing) -- a tabela anterior estava desatualizada
+# (tinha o preco antigo do Sonnet 4.6 rotulado como "claude-sonnet-5", ~50%
+# mais caro que o real, alem da chave do Haiku com sufixo de data que nao
+# corresponde a nenhum model ID valido). cache_write = 1.25x o input, cache_read
+# = 0.1x o input -- proporcao padrao da Anthropic pra cache efemero (TTL 5min).
 _PRECOS_POR_MILHAO = {
-    "claude-opus-5": {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50},
-    "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00, "cache_write": 1.25, "cache_read": 0.10},
-    "claude-fable-5-1": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_read": 1.00},
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_write": 6.25, "cache_read": 0.50},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_read": 0.20},
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_write": 1.25, "cache_read": 0.10},
 }
 
 

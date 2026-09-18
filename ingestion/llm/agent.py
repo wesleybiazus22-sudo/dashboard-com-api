@@ -92,26 +92,16 @@ def _primeiro_nome_lead(nome_completo: str | None) -> str | None:
     return None
 
 
-def _montar_system_prompt(nome_lead: str | None = None) -> str:
-    """Monta o system prompt com a data/hora ATUAL embutida -- sem isso o
-    modelo nao tem como saber que dia e hoje pra calcular "amanha de manha"
-    etc de forma confiavel na hora de preencher `horario_iso` em
-    `confirmar_reuniao`. Nome do dia da semana escrito na mao (nao via
-    `%A`) porque isso depende do locale do sistema operacional, que aqui
-    fica em ingles por padrao.
-
-    `nome_lead` (primeiro nome, ja extraido) personaliza a conversa -- sem
-    isso o modelo nao tem como saber com quem esta falando fora do template
-    de abertura (que usa o nome direto, sem passar pelo LLM)."""
-    agora = datetime.now(_FUSO_BRASIL)
-    dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
-    linha_nome = (
-        f'\nVocê está falando com {nome_lead}. Use o nome dele de vez em quando, com naturalidade -- não em toda mensagem, isso soa forçado.'
-        if nome_lead else ""
-    )
-    return f"""Você é {NOME_AGENTE}, o agente de vendas da Máquina.ISP -- uma solução de agentes de IA para provedores de internet (ISPs). Você atende pelo WhatsApp leads que chegaram através de anúncio ou do site, interessados em conhecer o produto.
-
-Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}
+# Parte ESTATICA do system prompt -- nunca muda entre chamadas (nem entre
+# conversas diferentes), por isso fica separada da parte dinamica (data/hora,
+# nome do lead) e ganha `cache_control` em `conversar()`: assim a Claude nao
+# recalcula essas ~1000+ tokens (mais as `_TOOLS`, que vem logo antes no
+# request) do zero em toda mensagem de toda conversa -- so paga o preco cheio
+# na primeira vez, as demais leem do cache (~90% mais barato). Juntar a data
+# atual ou o nome do lead aqui de volta quebraria o cache silenciosamente
+# (muda a toda mensagem/conversa) sem dar nenhum erro -- ver
+# `_montar_contexto_dinamico` pra isso.
+_SYSTEM_PROMPT_BASE = f"""Você é {NOME_AGENTE}, o agente de vendas da Máquina.ISP -- uma solução de agentes de IA para provedores de internet (ISPs). Você atende pelo WhatsApp leads que chegaram através de anúncio ou do site, interessados em conhecer o produto.
 
 SEU OBJETIVO: conduzir a conversa até o lead confirmar um horário de reunião/demonstração. Você não fecha venda por texto -- o objetivo é a reunião marcada, não o contrato assinado.
 
@@ -134,6 +124,26 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido manhã/tarde antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou "manhã ou tarde funciona melhor?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário -- não `confirmar_reuniao` de novo.
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não pergunte "manhã ou tarde?" de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
+
+
+def _montar_contexto_dinamico(nome_lead: str | None = None) -> str:
+    """Parte DINAMICA do system prompt -- data/hora atual (sem isso o modelo
+    nao tem como saber que dia e hoje pra calcular "amanha de manha" etc de
+    forma confiavel na hora de preencher `horario_iso`) e o nome do lead, se
+    conhecido. Fica de fora de `_SYSTEM_PROMPT_BASE` de proposito, pra nao
+    invalidar o cache dele -- ver comentario la. Nome do dia da semana
+    escrito na mao (nao via `%A`) porque isso depende do locale do sistema
+    operacional, que aqui fica em ingles por padrao."""
+    agora = datetime.now(_FUSO_BRASIL)
+    dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+    linha_nome = (
+        f'\nVocê está falando com {nome_lead}. Use o nome dele de vez em quando, com naturalidade -- não em toda mensagem, isso soa forçado.'
+        if nome_lead else ""
+    )
+    return (
+        f"Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). "
+        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}'
+    )
 
 
 _TOOLS = [
@@ -635,7 +645,7 @@ def _texto_sem_repeticao(blocos: list[str]) -> str:
     """Junta os blocos de texto do turno (ver docstring de `conversar`) podando
     sentenca que repete uma pergunta/frase/confirmacao ja feita antes NO MESMO
     turno -- mesmo parafraseada. O prompt ja pede pro modelo nao fazer isso
-    (ver `_montar_system_prompt`), mas na pratica ainda escapa -- sobretudo
+    (ver `_SYSTEM_PROMPT_BASE`), mas na pratica ainda escapa -- sobretudo
     quando ha chamada de ferramenta no meio do turno (o modelo confirma ANTES
     de chamar a ferramenta, "vai dar certo", e confirma DE NOVO depois de ver
     o resultado -- duas frases com vocabulario bem diferente, mesmo horario).
@@ -688,7 +698,7 @@ def _texto_sem_repeticao(blocos: list[str]) -> str:
 def _quebrar_em_paragrafos(texto: str) -> str:
     """Reagrupa o texto final em parágrafos curtos com linha em branco entre
     eles -- rede de segurança MECÂNICA pra regra de formato do prompt (ver
-    `_montar_system_prompt`). Testado e confirmado: mesmo com a regra descrita
+    `_SYSTEM_PROMPT_BASE`). Testado e confirmado: mesmo com a regra descrita
     como obrigatória + exemplo certo/errado explícito no prompt, o modelo
     continua devolvendo o texto todo num parágrafo só na maioria das vezes --
     mesmo padrão do que já acontecia com a regra de não repetir pergunta
@@ -739,7 +749,16 @@ def conversar(
     `nome_lead` (nome completo, opcional) personaliza o system prompt -- ver
     `_primeiro_nome_lead`."""
     cliente = _cliente()
-    system_prompt = _montar_system_prompt(nome_lead=_primeiro_nome_lead(nome_lead))
+    # `system` como lista de 2 blocos, nao uma string so: o primeiro (estatico,
+    # identico em toda chamada) leva `cache_control` e cobre tambem as
+    # `_TOOLS` (ordem do request e tools -> system -> messages, entao tudo
+    # antes do breakpoint entra no mesmo prefixo cacheado); o segundo (data/
+    # hora + nome do lead) muda a cada chamada e fica de fora do cache de
+    # proposito -- ver `_SYSTEM_PROMPT_BASE` e `_montar_contexto_dinamico`.
+    system_prompt = [
+        {"type": "text", "text": _SYSTEM_PROMPT_BASE, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": _montar_contexto_dinamico(nome_lead=_primeiro_nome_lead(nome_lead))},
+    ]
     mensagens = list(historico) + [{"role": "user", "content": mensagem}]
 
     # Junta o texto de TODAS as voltas do loop, nao so a ultima -- e comum o
