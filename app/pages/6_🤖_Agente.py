@@ -61,9 +61,16 @@ mensagens_all = query(
     """
 )
 
-for df, col in ((llm_all, "occurred_at"), (custo_wpp_all, "date"), (mensagens_all, "occurred_at")):
+for df, col in ((llm_all, "occurred_at"), (mensagens_all, "occurred_at")):
     if not df.empty:
-        df[col] = pd.to_datetime(df[col])
+        # `utc=True` cobre tanto o caso do valor ja vir com timezone (Postgres
+        # TIMESTAMPTZ) quanto naive (assume UTC, que e como tudo e gravado no
+        # banco) -- sem isso a coluna ficava crua em UTC e toda hora exibida
+        # na tela vinha 3h na frente do horario real de Brasilia.
+        df[col] = pd.to_datetime(df[col], utc=True).dt.tz_convert("America/Sao_Paulo")
+
+if not custo_wpp_all.empty:
+    custo_wpp_all["date"] = pd.to_datetime(custo_wpp_all["date"])  # Date puro (sem hora/fuso), nao precisa converter
 
 sem_dado_nenhum = llm_all.empty and custo_wpp_all.empty and mensagens_all.empty
 if sem_dado_nenhum:
@@ -242,7 +249,8 @@ kb_all = query("select titulo, categoria, conteudo, fonte, updated_at from knowl
 if kb_all.empty:
     st.caption("Base de conhecimento ainda não carregada — rode `python -m scripts.load_knowledge_base`.")
 else:
-    st.caption(f"{format_int(len(kb_all))} pedaços carregados, última atualização: {pd.to_datetime(kb_all['updated_at']).max():%d/%m/%Y %H:%M}")
+    ultima_atualizacao = pd.to_datetime(kb_all["updated_at"], utc=True).dt.tz_convert("America/Sao_Paulo").max()
+    st.caption(f"{format_int(len(kb_all))} pedaços carregados, última atualização: {ultima_atualizacao:%d/%m/%Y %H:%M}")
     for categoria, grupo in kb_all.groupby("categoria"):
         with st.expander(f"{categoria} ({len(grupo)})"):
             for _, row in grupo.iterrows():
