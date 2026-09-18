@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -60,11 +60,30 @@ NOME_AGENTE = "TEO"
 _FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
 _DURACAO_REUNIAO_MINUTOS = 30
 
+# Guardrail de horario comercial (pedido do dono do produto em 2026-09-18):
+# reuniao so pode ser marcada de segunda a sexta, entre 09:00 e 17:00 (horario
+# de Brasilia) -- o expediente real vai das 08:00 as 18:00, mas com 1h de
+# folga em cada ponta pra nao marcar em cima da hora de abrir/fechar.
+_EXPEDIENTE_INICIO = time(9, 0)
+_EXPEDIENTE_FIM = time(17, 0)
+
 
 _DIAS_SEMANA_PT = [
     "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
     "sexta-feira", "sábado", "domingo",
 ]
+
+
+def _horario_no_expediente(horario: datetime) -> tuple[bool, str | None]:
+    """Confere o guardrail de horario comercial (ver _EXPEDIENTE_*). Devolve
+    (valido, motivo_se_invalido) -- checado pra QUALQUER horario de reuniao
+    antes de mexer no CRM/agenda, tanto em confirmar_reuniao quanto em
+    reagendar_reuniao."""
+    if horario.weekday() >= 5:  # sabado=5, domingo=6
+        return False, "não marcamos reunião aos fins de semana"
+    if horario.time() < _EXPEDIENTE_INICIO or horario.time() > _EXPEDIENTE_FIM:
+        return False, "só marcamos reunião em horário comercial, entre 09:00 e 17:00"
+    return True, None
 
 
 def _primeiro_nome_lead(nome_completo: str | None) -> str | None:
@@ -111,6 +130,7 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - REGRA INEGOCIÁVEL: você NUNCA informa, estima ou sugere um valor de mensalidade/preço, mesmo que o lead insista, peça "só uma faixa", ou diga que só decide sabendo o preço. Toda vez que o lead tocar em preço/valor/desconto/condição de pagamento: (1) diga com naturalidade que o valor é justamente o que se esclarece NA REUNIÃO com um consultor, olhando o tamanho e o cenário do provedor dele -- não é algo que se define por mensagem; (2) pode adiantar que tem 60 dias de teste sem custo de implementação; (3) chame `encaminhar_para_humano`; e (4) use isso como o gancho natural pra propor a reunião (ou reforçar a que já foi proposta) -- a reunião não é uma coisa separada de "alguém vai te chamar", ela É onde a resposta de preço está. Nunca deixe a pergunta de preço "no ar" tipo só "vou chamar o time comercial" sem amarrar isso à reunião.
 - FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule direto pra segunda sem passar pela primeira, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse` e proponha ativamente horários (ex: "amanhã de manhã ou à tarde funciona melhor pra você?"); (2) SÓ quando o lead confirmar um horário específico (dia e período/hora), chame `confirmar_reuniao` com esse horário exato.
 - Nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
+- HORÁRIO COMERCIAL: só marcamos (ou reagendamos) reunião de segunda a sexta, entre 09:00 e 17:00 (horário de Brasília) -- nunca aos fins de semana. Se o lead sugerir um dia/horário fora disso (fim de semana, antes das 09:00, depois das 17:00), não confirme -- explique com naturalidade que esse horário está fora do expediente e proponha uma alternativa dentro da janela.
 - NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido manhã/tarde antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou "manhã ou tarde funciona melhor?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário -- não `confirmar_reuniao` de novo.
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não pergunte "manhã ou tarde?" de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
@@ -409,6 +429,18 @@ def _executar_ferramenta(
     if nome == "confirmar_reuniao":
         horario_iso = entrada.get("horario_iso", "")
         resumo = entrada.get("resumo", "")
+
+        horario_pedido = datetime.fromisoformat(horario_iso)
+        if horario_pedido.tzinfo is None:
+            horario_pedido = horario_pedido.replace(tzinfo=_FUSO_BRASIL)
+        dentro_do_expediente, motivo_fora = _horario_no_expediente(horario_pedido.astimezone(_FUSO_BRASIL))
+        if not dentro_do_expediente:
+            return (
+                f"[FORA DO HORÁRIO COMERCIAL -- {motivo_fora}, nada foi alterado no CRM/agenda] "
+                "Explique isso pro lead com naturalidade e peça um horário dentro do expediente "
+                "(segunda a sexta, 09:00 às 17:00)."
+            )
+
         if modo_teste or not deal_rd_id:
             return (
                 "[MODO TESTE -- nada foi alterado no CRM/agenda] Em produção, a negociação "
@@ -465,6 +497,18 @@ def _executar_ferramenta(
     if nome == "reagendar_reuniao":
         novo_horario_iso = entrada.get("novo_horario_iso", "")
         resumo = entrada.get("resumo", "")
+
+        novo_horario_pedido = datetime.fromisoformat(novo_horario_iso)
+        if novo_horario_pedido.tzinfo is None:
+            novo_horario_pedido = novo_horario_pedido.replace(tzinfo=_FUSO_BRASIL)
+        dentro_do_expediente, motivo_fora = _horario_no_expediente(novo_horario_pedido.astimezone(_FUSO_BRASIL))
+        if not dentro_do_expediente:
+            return (
+                f"[FORA DO HORÁRIO COMERCIAL -- {motivo_fora}, nada foi alterado no CRM/agenda] "
+                "Explique isso pro lead com naturalidade e peça um horário dentro do expediente "
+                "(segunda a sexta, 09:00 às 17:00)."
+            )
+
         if modo_teste or not deal_rd_id:
             return (
                 "[MODO TESTE -- nada foi alterado no CRM] A reunião seria reagendada pra "
