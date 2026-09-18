@@ -33,6 +33,23 @@ _TOKEN_URL_TEMPLATE = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/to
 _FUSO = "America/Sao_Paulo"
 
 
+def _hora_local_sem_offset(momento: datetime) -> str:
+    """Formata `momento` como string ISO SEM o offset de fuso (ex:
+    "2026-09-22T14:00:00", nunca "...-03:00") -- o campo `dateTime` da API do
+    Graph espera hora local "crua", com o fuso informado SEPARADAMENTE no
+    campo `timeZone` ao lado (documentacao oficial da Microsoft). Mandar as
+    duas coisas juntas (offset embutido na string, formato
+    `momento.isoformat()` puro, e MAIS o campo `timeZone`) confundiu o Graph
+    em pelo menos um caso real (2026-09-19): reuniao combinada pra 14:00 foi
+    parar as 11:00 na agenda -- exatamente a diferenca de 3h do fuso, sinal
+    de que o offset embutido estava sendo somado/ignorado errado por cima do
+    `timeZone`. Assume que `momento` ja esta com os numeros certos no fuso de
+    Brasilia (`_horario_no_expediente`/`_FUSO_BRASIL` em ingestion/llm/agent.py
+    garantem isso antes de chegar aqui) -- so tira a marcacao de fuso da
+    string, sem alterar os numeros."""
+    return momento.replace(tzinfo=None).isoformat()
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (429, 500, 502, 503, 504)
@@ -86,8 +103,8 @@ class MicrosoftCalendarClient:
         de usuario/delegated)."""
         corpo = {
             "schedules": [email_organizador],
-            "startTime": {"dateTime": inicio.isoformat(), "timeZone": _FUSO},
-            "endTime": {"dateTime": fim.isoformat(), "timeZone": _FUSO},
+            "startTime": {"dateTime": _hora_local_sem_offset(inicio), "timeZone": _FUSO},
+            "endTime": {"dateTime": _hora_local_sem_offset(fim), "timeZone": _FUSO},
             "availabilityViewInterval": 30,
         }
         resposta = self._request("POST", f"/users/{email_organizador}/calendar/getSchedule", json=corpo)
@@ -113,8 +130,8 @@ class MicrosoftCalendarClient:
         payload: dict = {
             "subject": assunto,
             "body": {"contentType": "HTML", "content": corpo},
-            "start": {"dateTime": inicio.isoformat(), "timeZone": _FUSO},
-            "end": {"dateTime": fim.isoformat(), "timeZone": _FUSO},
+            "start": {"dateTime": _hora_local_sem_offset(inicio), "timeZone": _FUSO},
+            "end": {"dateTime": _hora_local_sem_offset(fim), "timeZone": _FUSO},
             "isOnlineMeeting": True,
             "onlineMeetingProvider": "teamsForBusiness",
         }
@@ -130,7 +147,7 @@ class MicrosoftCalendarClient:
         por `reagendar_reuniao` (ver ingestion/llm/agent.py) quando o lead
         pede pra remarcar uma reuniao que o agente mesmo criou."""
         payload = {
-            "start": {"dateTime": inicio.isoformat(), "timeZone": _FUSO},
-            "end": {"dateTime": fim.isoformat(), "timeZone": _FUSO},
+            "start": {"dateTime": _hora_local_sem_offset(inicio), "timeZone": _FUSO},
+            "end": {"dateTime": _hora_local_sem_offset(fim), "timeZone": _FUSO},
         }
         return self._request("PATCH", f"/users/{email_organizador}/events/{evento_id}", json=payload)

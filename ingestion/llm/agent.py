@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -63,9 +63,18 @@ _DURACAO_REUNIAO_MINUTOS = 30
 # Guardrail de horario comercial (pedido do dono do produto em 2026-09-18):
 # reuniao so pode ser marcada de segunda a sexta, entre 09:00 e 17:00 (horario
 # de Brasilia) -- o expediente real vai das 08:00 as 18:00, mas com 1h de
-# folga em cada ponta pra nao marcar em cima da hora de abrir/fechar.
+# folga em cada ponta pra nao marcar em cima da hora de abrir/fechar. Tambem
+# nao pode em cima do almoco (12:00-13:30).
 _EXPEDIENTE_INICIO = time(9, 0)
 _EXPEDIENTE_FIM = time(17, 0)
+_ALMOCO_INICIO = time(12, 0)
+_ALMOCO_FIM = time(13, 30)
+
+# Horarios padrao que o agente oferece PROATIVAMENTE (ver
+# `_proximos_horarios_livres`) -- ja nascem fora da janela de almoco de
+# proposito, e cada um tem folga de 1h+ do seguinte (reuniao dura
+# `_DURACAO_REUNIAO_MINUTOS`).
+_SLOTS_PADRAO = [time(9, 0), time(10, 30), time(14, 0), time(15, 30)]
 
 
 _DIAS_SEMANA_PT = [
@@ -83,6 +92,8 @@ def _horario_no_expediente(horario: datetime) -> tuple[bool, str | None]:
         return False, "não marcamos reunião aos fins de semana"
     if horario.time() < _EXPEDIENTE_INICIO or horario.time() > _EXPEDIENTE_FIM:
         return False, "só marcamos reunião em horário comercial, entre 09:00 e 17:00"
+    if _ALMOCO_INICIO <= horario.time() < _ALMOCO_FIM:
+        return False, "esse horário cai no intervalo de almoço (12:00 às 13:30)"
     return True, None
 
 
@@ -118,12 +129,12 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - Use a ferramenta `consultar_base_conhecimento` sempre que precisar de um fato sobre o produto (o que cada agente faz, como funciona a implementação, integrações, teste grátis, etc.) antes de responder -- nunca invente ou "chute" uma informação sobre o produto.
 - Se a base de conhecimento não trouxer a resposta pra alguma pergunta, admita com naturalidade que vai confirmar, e chame `encaminhar_para_humano`. Não invente.
 - REGRA INEGOCIÁVEL: você NUNCA informa, estima ou sugere um valor de mensalidade/preço, mesmo que o lead insista, peça "só uma faixa", ou diga que só decide sabendo o preço. Toda vez que o lead tocar em preço/valor/desconto/condição de pagamento: (1) diga com naturalidade que o valor é justamente o que se esclarece NA REUNIÃO com um consultor, olhando o tamanho e o cenário do provedor dele -- não é algo que se define por mensagem; (2) pode adiantar que tem 60 dias de teste sem custo de implementação; (3) chame `encaminhar_para_humano`; e (4) use isso como o gancho natural pra propor a reunião (ou reforçar a que já foi proposta) -- a reunião não é uma coisa separada de "alguém vai te chamar", ela É onde a resposta de preço está. Nunca deixe a pergunta de preço "no ar" tipo só "vou chamar o time comercial" sem amarrar isso à reunião.
-- FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule direto pra segunda sem passar pela primeira, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse` e proponha ativamente horários (ex: "amanhã de manhã ou à tarde funciona melhor pra você?"); (2) SÓ quando o lead confirmar um horário específico (dia e período/hora), chame `confirmar_reuniao` com esse horário exato.
-- Nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
-- HORÁRIO COMERCIAL: só marcamos (ou reagendamos) reunião de segunda a sexta, entre 09:00 e 17:00 (horário de Brasília) -- nunca aos fins de semana. Se o lead sugerir um dia/horário fora disso (fim de semana, antes das 09:00, depois das 17:00), não confirme -- explique com naturalidade que esse horário está fora do expediente e proponha uma alternativa dentro da janela.
-- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido manhã/tarde antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou "manhã ou tarde funciona melhor?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
+- FLUXO DE REUNIÃO EM TRÊS ETAPAS -- não pule etapa, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse`; (2) em seguida chame `consultar_horarios_disponiveis` e apresente 2-3 das opções REAIS que ela devolver (ex: "Tenho livre segunda às 9h ou 14h, ou terça às 10h30 -- alguma dessas funciona?") -- NUNCA pergunte "manhã ou tarde funciona melhor?" de forma vaga, e NUNCA chute um horário sem consultar antes; (3) quando o lead confirmar uma das opções, chame `confirmar_reuniao` com esse horário exato -- se ele pedir um dia/horário diferente das opções (ex: "pode ser segunda" sem mais detalhe, ou um horário específico não oferecido), chame `consultar_horarios_disponiveis` de novo com `a_partir_de_iso` nesse dia pra achar um horário real por perto, em vez de aceitar cego.
+- Nunca chame `confirmar_reuniao` sem antes ter consultado `consultar_horarios_disponiveis` pra esse horário -- vale mesmo quando o lead já chega propondo um dia específico. E nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
+- HORÁRIO COMERCIAL: só marcamos (ou reagendamos) reunião de segunda a sexta, entre 09:00 e 17:00 (horário de Brasília), fora do intervalo de almoço (12:00 às 13:30) -- nunca aos fins de semana. `consultar_horarios_disponiveis` já respeita tudo isso sozinha; se mesmo assim o lead insistir num horário fora dessa janela, não confirme -- explique com naturalidade e ofereça uma alternativa real via `consultar_horarios_disponiveis`.
+- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido horários antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou repetir os mesmos horários de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário -- não `confirmar_reuniao` de novo.
-- Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não pergunte "manhã ou tarde?" de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
+- Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
 
 
 def _montar_contexto_dinamico(nome_lead: str | None = None) -> str:
@@ -177,6 +188,31 @@ _TOOLS = [
                 "resumo": {"type": "string", "description": "Resumo curto do interesse demonstrado pelo lead."},
             },
             "required": ["resumo"],
+        },
+    },
+    {
+        "name": "consultar_horarios_disponiveis",
+        "description": (
+            "Consulta a agenda de verdade (Microsoft Graph) e devolve os próximos horários "
+            "REALMENTE livres pra propor ao lead -- já pula fim de semana, horário fora do "
+            "expediente e horário no intervalo de almoço automaticamente. Chame isso SEMPRE "
+            "antes de propor qualquer dia/horário de reunião (inclusive quando o lead já "
+            "chegar sugerindo um dia, tipo 'pode ser segunda') -- nunca pergunte 'manhã ou "
+            "tarde funciona melhor?' de forma vaga nem chute um horário sem checar antes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a_partir_de_iso": {
+                    "type": "string",
+                    "description": (
+                        "Data (só a data, formato YYYY-MM-DD) a partir da qual buscar horários -- "
+                        "use quando o lead já mencionou um dia preferido (ex: 'semana que vem', "
+                        "'segunda'). Omita pra buscar a partir de agora."
+                    ),
+                },
+            },
+            "required": [],
         },
     },
     {
@@ -318,6 +354,43 @@ def _horario_disponivel_nas_agendas(owner: CrmUser, horario_iso: str) -> tuple[b
         return True, None
 
 
+def _proximos_horarios_livres(
+    owner: CrmUser, *, a_partir_de: date | None = None, max_opcoes: int = 4,
+) -> list[datetime]:
+    """Varre os proximos dias uteis a partir de `a_partir_de` (ou de agora,
+    se omitido) testando os `_SLOTS_PADRAO` contra a agenda de verdade
+    (`_horario_disponivel_nas_agendas`) ate achar `max_opcoes` horarios
+    realmente livres. Pula fim de semana, horario que ja passou e o
+    guardrail de expediente/almoco automaticamente -- pedido do dono do
+    produto em 2026-09-18: o agente estava propondo "amanha" sem checar se
+    caia num fim de semana, e chutando horario por horario sem consultar a
+    agenda antes, deixando o lead escolher um horario que so descobria
+    ocupado depois. Limite de 14 dias corridos de busca pra nunca rodar pra
+    sempre num periodo muito cheio."""
+    agora = datetime.now(_FUSO_BRASIL)
+    dia = a_partir_de or agora.date()
+    encontrados: list[datetime] = []
+    for _ in range(14):
+        for hora in _SLOTS_PADRAO:
+            candidato = datetime.combine(dia, hora, tzinfo=_FUSO_BRASIL)
+            if candidato <= agora:
+                continue
+            dentro_do_expediente, _ = _horario_no_expediente(candidato)
+            if not dentro_do_expediente:
+                continue
+            disponivel, _ = _horario_disponivel_nas_agendas(owner, candidato.isoformat())
+            if disponivel:
+                encontrados.append(candidato)
+                if len(encontrados) >= max_opcoes:
+                    return encontrados
+        dia = dia + timedelta(days=1)
+    return encontrados
+
+
+def _formatar_horarios_livres(horarios: list[datetime]) -> str:
+    return "\n".join(f"{_DIAS_SEMANA_PT[h.weekday()]} ({h:%d/%m}) às {h:%H:%M}" for h in horarios)
+
+
 def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, horario_iso: str, resumo: str) -> str | None:
     """Tenta criar o evento de verdade na agenda do dono da negociacao via
     Microsoft Graph. Convida o lead (quando o e-mail dele e conhecido) e,
@@ -435,6 +508,34 @@ def _executar_ferramenta(
             return f"[MODO TESTE -- nada foi alterado no CRM] Negociação seria movida pra 'Interesse Identificado'. Resumo: {resumo}"
         mover_negociacao_para_etapa(db, deal_rd_id, settings.rd_stage_interesse_identificado_rd_id)
         return "Interesse registrado no CRM com sucesso."
+
+    if nome == "consultar_horarios_disponiveis":
+        a_partir_de_iso = entrada.get("a_partir_de_iso") or ""
+        if modo_teste or not deal_rd_id:
+            return (
+                "[MODO TESTE -- sem negociação real pra consultar agenda] Simule 2-3 horários "
+                "plausíveis dentro do expediente (seg-sex, 09:00-17:00, fora do almoço 12:00-13:30) "
+                "e proponha como se fossem reais."
+            )
+        owner = _dono_da_negociacao(db, deal_rd_id)
+        if not owner or not _pode_usar_calendario():
+            return (
+                "Integração de agenda não disponível agora -- pergunte ao lead qual dia/período "
+                "prefere e chame confirmar_reuniao quando ele der um horário específico."
+            )
+        a_partir_de = None
+        if a_partir_de_iso:
+            try:
+                a_partir_de = date.fromisoformat(a_partir_de_iso[:10])
+            except ValueError:
+                a_partir_de = None
+        horarios = _proximos_horarios_livres(owner, a_partir_de=a_partir_de)
+        if not horarios:
+            return (
+                "Não achei nenhum horário livre nos próximos dias -- avise o lead com naturalidade "
+                "e peça pra ele sugerir um dia específico, ou chame encaminhar_para_humano."
+            )
+        return "Horários realmente livres na agenda:\n" + _formatar_horarios_livres(horarios)
 
     if nome == "confirmar_reuniao":
         horario_iso = entrada.get("horario_iso", "")
