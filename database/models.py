@@ -338,6 +338,13 @@ class CrmDeal(Base):
     campaign: Mapped[str | None] = mapped_column(String, nullable=True)
     source: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # UTM medium gravado pelo RD Marketing como campo personalizado -- gatilho
+    # alternativo/mais confiavel que `source` pro primeiro contato proativo do
+    # agente (ver ingestion/rd_crm/deals.py::_extract_utm_medium e
+    # webhooks/processor.py::_iniciar_atendimento_agente). NULL quando a
+    # negociacao nao tem esse campo personalizado preenchido.
+    utm_medium: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Click ID do Meta capturado no RD Marketing e copiado pro card da negociacao
     # via campo personalizado (ver README secao 14) -- fecha o loop entre o clique
     # no anuncio e o avanco no funil de vendas (ver ingestion/meta_ads/capi.py e o

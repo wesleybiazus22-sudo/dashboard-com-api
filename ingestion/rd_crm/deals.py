@@ -49,6 +49,34 @@ def _extract_fbclid(item: dict) -> str | None:
     return None
 
 
+def _extract_utm_medium(item: dict) -> str | None:
+    """UTM medium (ex: "paid_social") dentro de `custom_fields` -- muito mais
+    confiavel pra identificar trafego pago que o campo "Fonte" (source_id, ver
+    WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS em config/settings.py): confirmado em
+    2026-09-19 que uma negociacao real de trafego pago (fbclid + utm_source=
+    Instagram_Reels no custom_fields) chegou com source_id = "Desconhecido",
+    fazendo o gatilho de primeiro contato (na epoca, baseado so em source)
+    pular o lead silenciosamente. Ao contrario de `_extract_fbclid`, casa a
+    CHAVE EXATA "utm_medium" (case-insensitive) -- nao substring -- pra nao
+    confundir com "utm_medium_secundario" ou similar caso apareca."""
+    custom = item.get("custom_fields")
+    if not custom:
+        return None
+
+    if isinstance(custom, dict):
+        for chave, valor in custom.items():
+            if str(chave).strip().lower() == "utm_medium" and valor:
+                return str(valor).strip()
+    elif isinstance(custom, list):
+        for campo in custom:
+            if not isinstance(campo, dict):
+                continue
+            rotulo = str(campo.get("custom_field_id") or campo.get("label") or campo.get("name") or "")
+            if rotulo.strip().lower() == "utm_medium" and campo.get("value"):
+                return str(campo["value"]).strip()
+    return None
+
+
 def extract_deal_fields(item: dict) -> dict:
     return {
         "name": item.get("name"),
@@ -62,6 +90,7 @@ def extract_deal_fields(item: dict) -> dict:
         "current_owner_rd_id": item.get("owner_id"),
         "campaign": item.get("campaign_id"),
         "source": item.get("source_id"),
+        "utm_medium": _extract_utm_medium(item),
         "fbclid": _extract_fbclid(item),
         "lost_reason_rd_id": item.get("lost_reason_id"),
         "deal_created_at": parse_dt(item.get("created_at")),

@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     # sozinho, sem esperar ele escrever primeiro (ver webhooks/processor.py).
     # Default = "Outros | paid_social" (confirmado na base em 2026-09-06).
     whatsapp_agent_trigger_source_rd_ids: str = "6a9a29ffbe2d5f0001fd2555"
+    # Mesmo gatilho acima, mas pelo UTM medium (campo personalizado que o RD
+    # Marketing grava na negociacao -- ver ingestion/rd_crm/deals.py::
+    # _extract_utm_medium) em vez do campo "Fonte" (source_id, dropdown que
+    # pode vir errado/"Desconhecido" mesmo em lead de trafego pago de verdade
+    # -- confirmado 2026-09-19: negociacao real "Click internet" com fbclid E
+    # utm_source=Instagram_Reels no custom_fields, mas source_id apontando pra
+    # "Desconhecido", nunca recebeu a mensagem de abertura por causa disso).
+    # Dispara se OU o source OU o utm_medium bater -- ver _iniciar_atendimento_agente.
+    whatsapp_agent_trigger_utm_mediums: str = "paid_social"
     # Nome do TEMPLATE de mensagem aprovado no Meta Business Manager -- e
     # OBRIGATORIO pra iniciar conversa com quem nunca mandou mensagem pro
     # nosso numero (fora da janela de 24h, texto livre e recusado pelo Meta,

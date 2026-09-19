@@ -74,9 +74,19 @@ def _primeiro_nome(nome_completo: str | None) -> str:
 
 def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
     """Primeiro contato PROATIVO do agente: quando uma negociacao cai no CRM com
-    uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS (ver
-    config/settings.py -- default = "paid_social"), manda a mensagem de ABERTURA
-    pro lead, sem esperar ele escrever primeiro.
+    uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS OU um UTM
+    medium configurado em WHATSAPP_AGENT_TRIGGER_UTM_MEDIUMS (ver
+    config/settings.py -- default de ambos = "paid_social"), manda a mensagem
+    de ABERTURA pro lead, sem esperar ele escrever primeiro.
+
+    Os DOIS criterios existem (e bastam OU-logico, nao E) porque o campo
+    "Fonte" (source_id) e escolhido manualmente/automaticamente pelo RD e pode
+    vir errado (ex: "Desconhecido") mesmo numa negociacao real de trafego
+    pago -- confirmado 2026-09-19 com a negociacao "Click internet"
+    (fbclid + utm_source=Instagram_Reels no custom_fields, mas source_id =
+    "Desconhecido"), que por isso nunca recebeu a abertura. O utm_medium
+    (tambem em custom_fields, ver ingestion/rd_crm/deals.py::
+    _extract_utm_medium) costuma ser mais estavel pra esse caso.
 
     So manda TEMPLATE (`WhatsappClient.send_template`), nunca texto livre --
     regra do proprio Meta: quem nunca mandou mensagem pro nosso numero so
@@ -98,7 +108,12 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
     origens_gatilho = {
         s.strip() for s in settings.whatsapp_agent_trigger_source_rd_ids.split(",") if s.strip()
     }
-    if not deal.source or deal.source not in origens_gatilho:
+    utm_mediums_gatilho = {
+        s.strip().lower() for s in settings.whatsapp_agent_trigger_utm_mediums.split(",") if s.strip()
+    }
+    bate_source = bool(deal.source) and deal.source in origens_gatilho
+    bate_utm = bool(deal.utm_medium) and deal.utm_medium.strip().lower() in utm_mediums_gatilho
+    if not bate_source and not bate_utm:
         return
 
     if not settings.whatsapp_agent_template_name:

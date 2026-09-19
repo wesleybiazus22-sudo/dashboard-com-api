@@ -12,6 +12,7 @@ from database.connection import Base, engine
 # contra um banco desatualizado.
 _ALTERS = [
     "alter table crm_deals add column if not exists fbclid varchar",
+    "alter table crm_deals add column if not exists utm_medium varchar",
 ]
 
 if __name__ == "__main__":

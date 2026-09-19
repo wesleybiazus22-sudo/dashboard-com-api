@@ -26,6 +26,8 @@ Uso: python -m scripts.reprocessar_leads_trafego_pago
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, or_
+
 from config.settings import settings
 from database.connection import session_scope
 from database.models import CrmDeal, WhatsappMessage
@@ -35,9 +37,19 @@ JANELA_HORAS = 24
 
 
 def main() -> None:
+    # Mesmo OU-logico de `_iniciar_atendimento_agente` (source OU utm_medium --
+    # ver webhooks/processor.py e docstring la pra motivo de ter os dois).
     origens_gatilho = {s.strip() for s in settings.whatsapp_agent_trigger_source_rd_ids.split(",") if s.strip()}
-    if not origens_gatilho or not settings.whatsapp_agent_template_name:
-        print("Gatilho de abertura desligado (origem ou template nao configurado) -- nada a reprocessar.")
+    utm_mediums_gatilho = {
+        s.strip().lower() for s in settings.whatsapp_agent_trigger_utm_mediums.split(",") if s.strip()
+    }
+    condicoes_origem = []
+    if origens_gatilho:
+        condicoes_origem.append(CrmDeal.source.in_(origens_gatilho))
+    if utm_mediums_gatilho:
+        condicoes_origem.append(func.lower(CrmDeal.utm_medium).in_(utm_mediums_gatilho))
+    if not condicoes_origem or not settings.whatsapp_agent_template_name:
+        print("Gatilho de abertura desligado (origem/utm_medium ou template nao configurado) -- nada a reprocessar.")
         return
 
     corte = datetime.now(timezone.utc) - timedelta(hours=JANELA_HORAS)
@@ -47,7 +59,7 @@ def main() -> None:
         candidatos = (
             db.query(CrmDeal)
             .filter(
-                CrmDeal.source.in_(origens_gatilho),
+                or_(*condicoes_origem),
                 CrmDeal.status == "ongoing",
                 CrmDeal.deal_created_at >= corte,
                 ~CrmDeal.rd_id.in_(
