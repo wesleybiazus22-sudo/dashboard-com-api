@@ -56,20 +56,21 @@ def main() -> None:
     tentados = 0
 
     with session_scope() as db:
-        candidatos = (
-            db.query(CrmDeal)
-            .filter(
-                or_(*condicoes_origem),
-                CrmDeal.status == "ongoing",
-                CrmDeal.deal_created_at >= corte,
-                ~CrmDeal.rd_id.in_(
-                    db.query(WhatsappMessage.deal_rd_id).filter(
-                        WhatsappMessage.message_type == "template", WhatsappMessage.deal_rd_id.isnot(None),
-                    )
-                ),
-            )
-            .all()
-        )
+        etapa_gatilho = settings.whatsapp_agent_trigger_stage_rd_id.strip()
+        filtros = [
+            or_(*condicoes_origem),
+            CrmDeal.status == "ongoing",
+            CrmDeal.deal_created_at >= corte,
+            ~CrmDeal.rd_id.in_(
+                db.query(WhatsappMessage.deal_rd_id).filter(
+                    WhatsappMessage.message_type == "template", WhatsappMessage.deal_rd_id.isnot(None),
+                )
+            ),
+        ]
+        if etapa_gatilho:  # mesma trava de etapa de `_iniciar_atendimento_agente`
+            filtros.append(CrmDeal.stage_rd_id == etapa_gatilho)
+
+        candidatos = db.query(CrmDeal).filter(*filtros).all()
 
         for deal in candidatos:
             print(f"Reprocessando negociação {deal.rd_id} ({deal.name}) -- tentando primeiro contato de novo.")

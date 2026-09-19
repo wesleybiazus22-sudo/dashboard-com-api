@@ -76,10 +76,11 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
     """Primeiro contato PROATIVO do agente: quando uma negociacao cai no CRM com
     uma origem configurada em WHATSAPP_AGENT_TRIGGER_SOURCE_RD_IDS OU um UTM
     medium configurado em WHATSAPP_AGENT_TRIGGER_UTM_MEDIUMS (ver
-    config/settings.py -- default de ambos = "paid_social"), manda a mensagem
-    de ABERTURA pro lead, sem esperar ele escrever primeiro.
+    config/settings.py -- default de ambos = "paid_social"), E ESTIVER na
+    etapa WHATSAPP_AGENT_TRIGGER_STAGE_RD_ID (default = "Primeira Conexao"),
+    manda a mensagem de ABERTURA pro lead, sem esperar ele escrever primeiro.
 
-    Os DOIS criterios existem (e bastam OU-logico, nao E) porque o campo
+    source/utm_medium sao OU-logico entre si (basta um bater) porque o campo
     "Fonte" (source_id) e escolhido manualmente/automaticamente pelo RD e pode
     vir errado (ex: "Desconhecido") mesmo numa negociacao real de trafego
     pago -- confirmado 2026-09-19 com a negociacao "Click internet"
@@ -87,6 +88,11 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
     "Desconhecido"), que por isso nunca recebeu a abertura. O utm_medium
     (tambem em custom_fields, ver ingestion/rd_crm/deals.py::
     _extract_utm_medium) costuma ser mais estavel pra esse caso.
+
+    Ja a etapa e E-logico (trava adicional, nao alternativa) -- pedido
+    explicito do usuario em 2026-09-19 pra NAO mandar a abertura automatica
+    numa negociacao que ja saiu da coluna de entrada (ex: SDR ja fez contato
+    manual por outro canal antes do sync rodar).
 
     So manda TEMPLATE (`WhatsappClient.send_template`), nunca texto livre --
     regra do proprio Meta: quem nunca mandou mensagem pro nosso numero so
@@ -114,6 +120,10 @@ def _iniciar_atendimento_agente(db: Session, deal: CrmDeal) -> None:
     bate_source = bool(deal.source) and deal.source in origens_gatilho
     bate_utm = bool(deal.utm_medium) and deal.utm_medium.strip().lower() in utm_mediums_gatilho
     if not bate_source and not bate_utm:
+        return
+
+    etapa_gatilho = settings.whatsapp_agent_trigger_stage_rd_id.strip()
+    if etapa_gatilho and deal.stage_rd_id != etapa_gatilho:
         return
 
     if not settings.whatsapp_agent_template_name:

@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     # "Desconhecido", nunca recebeu a mensagem de abertura por causa disso).
     # Dispara se OU o source OU o utm_medium bater -- ver _iniciar_atendimento_agente.
     whatsapp_agent_trigger_utm_mediums: str = "paid_social"
+    # Trava adicional (E-logico, nao OU): so dispara a abertura se a negociacao
+    # estiver NESSA etapa do funil -- pedido explicito do usuario em 2026-09-19
+    # pra nao mandar a mensagem de abertura pra negociacao que ja avancou de
+    # coluna (ex: SDR ja fez contato por outro canal antes do sync). Vazio =
+    # sem trava de etapa (qualquer coluna serve, comportamento antigo).
+    whatsapp_agent_trigger_stage_rd_id: str = "687fe8cbd5677c001aa540b4"  # Primeira Conexao
     # Nome do TEMPLATE de mensagem aprovado no Meta Business Manager -- e
     # OBRIGATORIO pra iniciar conversa com quem nunca mandou mensagem pro
     # nosso numero (fora da janela de 24h, texto livre e recusado pelo Meta,
