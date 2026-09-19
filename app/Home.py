@@ -17,5 +17,6 @@ page = st.navigation({"Máquina ISP": [
     section("5_", "Tráfego · Google Analytics", "GA4", "📈"),
     section("3_", "Distribuição geográfica", "Geografia", "🗺️"),
     section("6_", "Agente de atendimento", "Agente", "🤖"),
+    section("7_", "Convite manual · Agente", "Convite_Agente", "🙋"),
 ]}, expanded=True)
 page.run()
