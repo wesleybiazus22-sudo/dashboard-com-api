@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 NOME_AGENTE = "TEO"
 _FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
-_DURACAO_REUNIAO_MINUTOS = 30
+_DURACAO_REUNIAO_MINUTOS = 60
 
 # Guardrail de horario comercial (pedido do dono do produto em 2026-09-18):
 # reuniao so pode ser marcada de segunda a sexta, entre 09:00 e 17:00 (horario
@@ -92,7 +92,17 @@ def _horario_no_expediente(horario: datetime) -> tuple[bool, str | None]:
         return False, "não marcamos reunião aos fins de semana"
     if horario.time() < _EXPEDIENTE_INICIO or horario.time() > _EXPEDIENTE_FIM:
         return False, "só marcamos reunião em horário comercial, entre 09:00 e 17:00"
-    if _ALMOCO_INICIO <= horario.time() < _ALMOCO_FIM:
+    # Com reuniao de 1h (_DURACAO_REUNIAO_MINUTOS), um horario que comeca DENTRO
+    # do expediente ainda pode TERMINAR depois das 17:00 (ex: 16:30) -- checa o
+    # fim tambem, nao so o inicio.
+    fim = (horario + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)).time()
+    if fim > _EXPEDIENTE_FIM:
+        return False, f"esse horário terminaria depois das {_EXPEDIENTE_FIM.strftime('%H:%M')}, fora do expediente"
+    # Overlap [inicio, fim) x [almoco_inicio, almoco_fim) -- nao basta checar
+    # so o INICIO (mesmo motivo do fim x expediente acima): uma reuniao de 1h
+    # comecando as 11:15 termina 12:15, invadindo o almoco, mesmo comecando
+    # antes dele.
+    if horario.time() < _ALMOCO_FIM and fim > _ALMOCO_INICIO:
         return False, "esse horário cai no intervalo de almoço (12:00 às 13:30)"
     return True, None
 
