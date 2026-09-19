@@ -111,6 +111,22 @@ class Settings(BaseSettings):
     # coluna (ex: SDR ja fez contato por outro canal antes do sync). Vazio =
     # sem trava de etapa (qualquer coluna serve, comportamento antigo).
     whatsapp_agent_trigger_stage_rd_id: str = "687fe8cbd5677c001aa540b4"  # Primeira Conexao
+
+    # Convite MANUAL do agente pra lead de prospeccao ativa (fonte "Melhor
+    # Venda") -- pedido do usuario em 2026-09-19: a SDR, em ligacao/conversa
+    # ativa, pode oferecer uma demonstracao da conversa agentica pro prospect.
+    # DIFERENTE do gatilho automatico acima (source/utm_medium/etapa): aqui
+    # quem decide DISPARAR e a SDR, na hora, escolhendo a PESSOA especifica
+    # (card de Melhor Venda pode ter varios contatos puxados -- nao pode
+    # mandar pra todos). Ver whatsapp/manual_invite.py e
+    # app/pages/7_🙋_Convite_Agente.py.
+    whatsapp_agent_melhor_venda_source_rd_ids: str = "6a39411c5945e80029aa36ea"  # Melhor Venda
+    # Template dedicado pra esse hand-off (diferente do template de trafego
+    # pago -- esse fala "a SDR pediu pra eu continuar", nao "voce clicou no
+    # anuncio"). Vazio = convite manual DESLIGADO ate o template ser aprovado
+    # no Meta (mesmo padrao de WHATSAPP_AGENT_TEMPLATE_NAME).
+    whatsapp_agent_melhor_venda_template_name: str = ""
+    whatsapp_agent_melhor_venda_template_language: str = "pt_BR"
     # Nome do TEMPLATE de mensagem aprovado no Meta Business Manager -- e
     # OBRIGATORIO pra iniciar conversa com quem nunca mandou mensagem pro
     # nosso numero (fora da janela de 24h, texto livre e recusado pelo Meta,
