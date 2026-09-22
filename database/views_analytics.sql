@@ -125,7 +125,11 @@ select
     extract(epoch from (a.primeiro_toque_at - m.deal_created_at)) / 3600 as horas_ate_primeiro_toque,
     extract(epoch from (coalesce(m.closed_at, now()) - m.deal_created_at)) / 86400 as dias_no_funil,
     date_trunc('month', m.deal_created_at) as mes_criacao,
-    date_trunc('week', m.deal_created_at) as semana_criacao
+    date_trunc('week', m.deal_created_at) as semana_criacao,
+    -- No FIM de proposito -- CREATE OR REPLACE VIEW so aceita coluna nova no fim da
+    -- lista (ver mesmo comentario em v_maquina_isp_deal_milestones).
+    m.sdr_ganhou_at,
+    m.closer_ganhou_at
 from v_maquina_isp_deal_milestones m
 join crm_deals d on d.rd_id = m.deal_id
 left join crm_pipelines p on p.rd_id = d.pipeline_rd_id

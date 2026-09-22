@@ -427,6 +427,27 @@ freemium as (
 perfis_excluidos as (
     select rd_id from crm_users
     where name in ('Jônatas dos Reis da Silva', 'Adriano Lopes', 'Wesley Biazus', 'Ingrid')
+),
+-- Data em que cada negociacao ENTROU pela primeira vez em Reuniao Realizada (ou
+-- adiante) / Freemium (ou adiante) -- ver `sdr_ganhou_at`/`closer_ganhou_at` abaixo.
+-- Precisa disso pra graficos de evolucao no tempo poderem bucketar pelo mes em que
+-- o MARCO aconteceu, nao pelo mes em que a negociacao foi criada (a data de
+-- criacao so responde "quando entrou", nunca "quando a reuniao rolou de verdade").
+sdr_ganhou_em as (
+    select sh.deal_rd_id, min(sh.entered_at) as em
+    from crm_deal_stage_history sh
+    join crm_stages s on s.rd_id = sh.stage_rd_id
+    join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+    where s."order" >= (select ord from reuniao_realizada)
+    group by sh.deal_rd_id
+),
+closer_ganhou_em as (
+    select sh.deal_rd_id, min(sh.entered_at) as em
+    from crm_deal_stage_history sh
+    join crm_stages s on s.rd_id = sh.stage_rd_id
+    join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
+    where s."order" >= (select ord from freemium)
+    group by sh.deal_rd_id
 )
 select
     d.rd_id as deal_id,
@@ -444,31 +465,38 @@ select
     d.closed_at,
     (
         (d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from reuniao_realizada))
-        or exists (
-            select 1
-            from crm_deal_stage_history sh
-            join crm_stages s on s.rd_id = sh.stage_rd_id
-            join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
-            where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from reuniao_realizada)
-        )
+        or sge.em is not null
     ) as sdr_ganhou,
     (
         (d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from freemium))
-        or exists (
-            select 1
-            from crm_deal_stage_history sh
-            join crm_stages s on s.rd_id = sh.stage_rd_id
-            join closer_pipeline cp on cp.rd_id = sh.pipeline_rd_id
-            where sh.deal_rd_id = d.rd_id and s."order" >= (select ord from freemium)
-        )
+        or cge.em is not null
     ) as closer_ganhou,
     s_now.canonical_stage,
-    s_now."order" as stage_order
+    s_now."order" as stage_order,
+    -- Fallback pra `deal_updated_at` so cobre o caso raro de a negociacao estar HOJE
+    -- numa etapa que qualifica mas nunca ter ganho uma linha de historico pra ela
+    -- (gap de sync antigo, ver comentario de `v_maquina_isp_stage_reach`) -- sem
+    -- isso essa negociacao contaria como "ganhou" mas sem nenhuma data pra plotar.
+    -- Colunas NO FIM de proposito: Postgres so deixa CREATE OR REPLACE VIEW ACRESCENTAR
+    -- coluna no fim da lista, nunca inserir no meio (tentar rebatiza a coluna que ja
+    -- estava naquela posicao -- erro real que bati tentando inserir isso mais acima).
+    coalesce(
+        sge.em,
+        case when d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from reuniao_realizada)
+             then d.deal_updated_at end
+    ) as sdr_ganhou_at,
+    coalesce(
+        cge.em,
+        case when d.pipeline_rd_id = (select rd_id from closer_pipeline) and s_now."order" >= (select ord from freemium)
+             then d.deal_updated_at end
+    ) as closer_ganhou_at
 from crm_deals d
 join crm_pipelines p on p.rd_id = d.pipeline_rd_id
 left join crm_stages s_now on s_now.rd_id = d.stage_rd_id
 left join crm_users su on su.rd_id = d.sdr_owner_rd_id
 left join crm_users cu on cu.rd_id = d.closer_owner_rd_id
+left join sdr_ganhou_em sge on sge.deal_rd_id = d.rd_id
+left join closer_ganhou_em cge on cge.deal_rd_id = d.rd_id
 where p.product_group = 'Máquina ISP'
   and d.deal_created_at >= '2026-04-01'
   and (d.sdr_owner_rd_id is null or d.sdr_owner_rd_id not in (select rd_id from perfis_excluidos))

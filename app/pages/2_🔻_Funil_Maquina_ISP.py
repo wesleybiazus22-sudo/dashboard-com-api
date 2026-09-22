@@ -47,7 +47,8 @@ if deals_all.empty:
     st.info("Nenhuma negociação no escopo do Máquina ISP.")
     st.stop()
 
-deals_all["deal_created_at"] = pd.to_datetime(deals_all["deal_created_at"], utc=True, errors="coerce")
+for _col in ("deal_created_at", "closed_at", "sdr_ganhou_at", "closer_ganhou_at"):
+    deals_all[_col] = pd.to_datetime(deals_all[_col], utc=True, errors="coerce")
 deals_all["deal_status_label"] = deals_all["deal_status"].map(DEAL_STATUS_LABELS).fillna(deals_all["deal_status"])
 
 alcance_all = query("select * from v_maquina_isp_stage_reach")
@@ -330,17 +331,29 @@ with st.expander("Composição e evolução", expanded=False):
 
     # ---------------------------------------------------------------- Evolucao temporal
     st.subheader("Evolução no tempo")
+    st.caption(
+        "Cada linha bucketada pela SUA PRÓPRIA data -- Criadas por quando entraram, "
+        "Perdidas por quando foram de fato marcadas como perdidas, Reunião realizada por "
+        "quando a negociação de fato chegou lá. Nenhuma das três usa a data de criação como "
+        "proxy das outras duas (um lead criado em julho que só teve reunião em setembro "
+        "conta em setembro, não em julho)."
+    )
 
-    serie = deals.copy()
-    periodo_pandas = {"D": "D", "W-MON": "W-MON", "MS": "M"}[gran_regra]
-    serie["bucket"] = serie["deal_created_at"].dt.tz_convert(None).dt.to_period(periodo_pandas).dt.start_time
+    def _bucket(col: str) -> pd.Series:
+        periodo_pandas = {"D": "D", "W-MON": "W-MON", "MS": "M"}[gran_regra]
+        return deals[col].dt.tz_convert(None).dt.to_period(periodo_pandas).dt.start_time
 
-    evol = serie.groupby("bucket").agg(
-        Criadas=("deal_id", "nunique"),
-        Perdidas=("deal_status", lambda s: int((s == "lost").sum())),
-    ).reset_index()
-    ganhos = serie[serie["sdr_ganhou"]].groupby("bucket")["deal_id"].nunique().reset_index(name="Reunião realizada")
-    evol = evol.merge(ganhos, on="bucket", how="left").fillna({"Reunião realizada": 0})
+    criadas = deals.assign(bucket=_bucket("deal_created_at")).groupby("bucket")["deal_id"].nunique().reset_index(name="Criadas")
+    perdidas_ts = (
+        deals[deals["deal_status"] == "lost"].assign(bucket=_bucket("closed_at"))
+        .groupby("bucket")["deal_id"].nunique().reset_index(name="Perdidas")
+    )
+    ganhos = (
+        deals[deals["sdr_ganhou"]].assign(bucket=_bucket("sdr_ganhou_at"))
+        .groupby("bucket")["deal_id"].nunique().reset_index(name="Reunião realizada")
+    )
+    evol = criadas.merge(perdidas_ts, on="bucket", how="outer").merge(ganhos, on="bucket", how="outer")
+    evol = evol.fillna(0).sort_values("bucket")
 
     fig_evol = charts.serie_temporal(
         evol, x="bucket",
