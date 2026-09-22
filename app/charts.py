@@ -21,6 +21,7 @@ from app.theme import (
     BRAND_BLUE_600,
     BRAND_INK_200,
     BRAND_INK_500,
+    CAT_AQUA,
     CAT_ORANGE,
     CATEGORICAL,
     GRIDLINE,
@@ -339,6 +340,51 @@ def serie_temporal(
     fig.update_xaxes(showgrid=False)
     base_layout(fig, height=altura)
     fig.update_layout(hovermode="x unified")
+    return fig
+
+
+def evolucao_funil_mensal(dados: pd.DataFrame, *, altura: int = 380) -> go.Figure:
+    """Evolução mensal do funil: volume de entrada (eixo esquerdo, contagem) +
+    3 taxas de conversão/perda (eixo direito, %) -- as linhas que respondem "estamos
+    melhorando ou piorando mes a mes", nao so "quantas negociacoes tivemos".
+
+    Espera `dados` com colunas: mes, criadas, pct_sdr, pct_closer, pct_perdidas.
+
+    As 3 taxas (nao volume bruto por etapa) sao a escolha deliberada aqui: um volume
+    crescente de "Reunião Realizada" pode significar so que criamos mais negociações
+    naquele mês, nao que a conversão melhorou -- taxa normaliza pelo volume do próprio
+    mês e isola a mudança de EFICIÊNCIA do funil da mudança de VOLUME de entrada."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=dados["mes"], y=dados["criadas"], name="Negociações criadas",
+        mode="lines+markers", line=dict(color=BRAND_BLUE_600, width=2.5),
+        marker=dict(size=7, color=BRAND_BLUE_600),
+        yaxis="y1",
+        hovertemplate="<b>%{x|%b/%Y}</b><br>Negociações criadas: %{y}<extra></extra>",
+    ))
+    for coluna, nome, cor in (
+        ("pct_sdr", "% chegou em Reunião Realizada", CAT_AQUA),
+        ("pct_closer", "% chegou em Freemium", STATUS_GOOD),
+        ("pct_perdidas", "% perdida", STATUS_CRITICAL),
+    ):
+        fig.add_trace(go.Scatter(
+            x=dados["mes"], y=dados[coluna], name=nome,
+            mode="lines+markers", line=dict(color=cor, width=2.5, dash="dot"),
+            marker=dict(size=6, color=cor),
+            yaxis="y2",
+            hovertemplate="<b>%{x|%b/%Y}</b><br>" + nome + ": %{y}%<extra></extra>",
+        ))
+
+    fig.update_layout(
+        xaxis=dict(showgrid=False),
+        yaxis=dict(title="Negociações criadas", rangemode="tozero", gridcolor="#EDF0F5"),
+        yaxis2=dict(
+            title="% do mês", rangemode="tozero", ticksuffix="%",
+            overlaying="y", side="right", showgrid=False, range=[0, 100],
+        ),
+        hovermode="x unified",
+    )
+    base_layout(fig, height=altura)
     return fig
 
 

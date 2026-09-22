@@ -54,18 +54,37 @@ alcance_all = query("select * from v_maquina_isp_stage_reach")
 
 # ---------------------------------------------------------------- Filtros
 with st.container(border=True):
+    fotografia_atual = st.checkbox(
+        "📸 Negociações em andamento agora (ignora a data de criação)",
+        key=f"fotografia::{PAGE}",
+        help=(
+            "Mostra só quem está EM ANDAMENTO hoje -- não o histórico de já ganhas/perdidas --, "
+            "ignorando a data em que cada uma entrou. Use isso pra apresentar o funil ativo pra "
+            "diretoria: sem isso, uma negociação antiga que ainda está ativa hoje pode sumir do "
+            "recorte só porque ela entrou fora do período escolhido, e negociações já concluídas "
+            "(ganhas ou perdidas) inflam os números sem representar o pipeline de verdade."
+        ),
+    )
+
     c_data, c_gran = st.columns([3, 1])
     with c_data:
-        inicio, fim, _preset = filters.filtro_periodo(
-            deals_all["deal_created_at"].min(),
-            deals_all["deal_created_at"].max(),
-            page=PAGE,
-            label="Período de criação da negociação",
-        )
+        if fotografia_atual:
+            st.markdown("**Período de criação da negociação**")
+            st.caption(
+                "🔒 Desativado em modo Em andamento agora -- mostra toda negociação com "
+                "status 'Em andamento', não importa quando foi criada (já ganhas/perdidas ficam de fora)."
+            )
+            deals_periodo = deals_all[deals_all["deal_status"] == "ongoing"]
+        else:
+            inicio, fim, _preset = filters.filtro_periodo(
+                deals_all["deal_created_at"].min(),
+                deals_all["deal_created_at"].max(),
+                page=PAGE,
+                label="Período de criação da negociação",
+            )
+            deals_periodo = filters.recorta_periodo(deals_all, "deal_created_at", inicio, fim)
     with c_gran:
         _gran_label, gran_regra = filters.filtro_granularidade(PAGE)
-
-    deals_periodo = filters.recorta_periodo(deals_all, "deal_created_at", inicio, fim)
 
     f1, f2, f3, f4, f5 = st.columns(5)
     with f1:
@@ -119,10 +138,14 @@ perdidas = int((deals["deal_status"] == "lost").sum())
 andamento = int((deals["deal_status"] == "ongoing").sum())
 mediana_dias = deals["dias_no_funil"].median()
 
-st.subheader("Visão geral do período")
+st.subheader("Visão geral (em andamento agora)" if fotografia_atual else "Visão geral do período")
 k1, k2, k3 = st.columns(3)
 k4, k5, k6 = st.columns(3)
-k1.metric("Negociações", format_int(total), help="Negociações criadas no período e incluídas nos filtros atuais.")
+k1.metric(
+    "Negociações", format_int(total),
+    help="Negociações em andamento hoje, incluídas nos filtros atuais (já ganhas/perdidas ficam de fora)." if fotografia_atual
+    else "Negociações criadas no período e incluídas nos filtros atuais.",
+)
 k2.metric("Em andamento", format_int(andamento), f"{format_pct(100 * andamento / total)} do total", delta_color="off")
 k3.metric(
     "Reunião realizada", format_int(sdr_ganhos),
@@ -227,6 +250,42 @@ st.plotly_chart(
     charts.snapshot_estagios(snapshot_df), use_container_width=True,
     key=f"{PAGE}_snapshot", config={"displayModeBar": False},
 )
+
+st.divider()
+
+# ---------------------------------------------------------------- Evolucao mensal
+st.subheader("Evolução mensal do funil")
+st.caption(
+    "Volume de negociações criadas por mês (linha cheia, eixo esquerdo) contra 3 taxas "
+    "calculadas sobre o volume do próprio mês (linhas pontilhadas, eixo direito): quanto "
+    "chegou em Reunião Realizada, quanto chegou em Freemium e quanto foi perdido. Taxa em "
+    "vez de volume bruto isola mudança de EFICIÊNCIA (melhor/pior conversão) de mudança de "
+    "VOLUME de entrada -- as duas coisas juntas costumam se confundir num gráfico só de contagem."
+)
+mensal = deals.copy()
+mensal["mes"] = mensal["deal_created_at"].dt.tz_convert(None).dt.to_period("M").dt.start_time
+evolucao_mensal = mensal.groupby("mes").agg(
+    criadas=("deal_id", "nunique"),
+    sdr_ok=("sdr_ganhou", "sum"),
+    closer_ok=("closer_ganhou", "sum"),
+    perdidas=("deal_status", lambda s: int((s == "lost").sum())),
+).reset_index()
+evolucao_mensal["pct_sdr"] = (100 * evolucao_mensal["sdr_ok"] / evolucao_mensal["criadas"]).round(1)
+evolucao_mensal["pct_closer"] = (100 * evolucao_mensal["closer_ok"] / evolucao_mensal["criadas"]).round(1)
+evolucao_mensal["pct_perdidas"] = (100 * evolucao_mensal["perdidas"] / evolucao_mensal["criadas"]).round(1)
+
+if len(evolucao_mensal) < 2:
+    st.caption("Menos de 2 meses no recorte atual -- sem tendência pra mostrar ainda.")
+else:
+    st.plotly_chart(
+        charts.evolucao_funil_mensal(evolucao_mensal), use_container_width=True,
+        key=f"{PAGE}_evolucao_mensal", config={"displayModeBar": False},
+    )
+    st.caption(
+        f"⚠️ O mês mais recente ({evolucao_mensal['mes'].max():%b/%Y}) tende a mostrar taxas "
+        "mais baixas por natureza: negociações criadas há poucos dias ainda não tiveram tempo "
+        "de avançar no funil. Não leia como piora real sem comparar com a maturação dos meses anteriores."
+    )
 
 st.divider()
 
