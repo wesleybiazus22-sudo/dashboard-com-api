@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     rd_webhook_token: str = ""
     sync_trigger_token: str = ""
 
+    # Integracoes OPCIONAIS que estao desligadas de proposito. Lista separada por
+    # virgula; valores aceitos: ga4, meta_ads, whatsapp.
+    #
+    # Existe por causa de um apagao silencioso: entre 17/09 e 05/10/2026 o GA4 passou
+    # 18 dias sem sincronizar sem ninguem perceber, porque a etapa tratava "credencial
+    # ausente" como SUCESSO -- o GitHub Actions ficava verde numa rodada que nao
+    # trouxe nada de GA4. Agora credencial ausente e FALHA (derruba o exit code da
+    # rodada), a menos que a fonte esteja nomeada aqui. Ou seja: desligar uma fonte
+    # passou a ser uma decisao explicita, e nao o efeito colateral de um secret que
+    # sumiu. Ver `_pode_sincronizar` em ingestion/sync_all.py.
+    sync_fontes_desligadas: str = ""
+
     # Meta Ads (Marketing API). Opcionais pela mesma razao das credenciais do RD:
     # o dashboard nao pode depender delas pra subir. `meta_access_token` e o token
     # de um USUARIO DO SISTEMA (nao de usuario comum) -- nao expira em 60 dias como

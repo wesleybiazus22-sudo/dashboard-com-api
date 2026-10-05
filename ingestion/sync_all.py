@@ -62,14 +62,42 @@ def _run_step(db, label: str, fn) -> bool:
         return False
 
 
-def _sync_meta_ads(full: bool) -> bool:
-    """Sincroniza Meta Ads se META_ACCESS_TOKEN estiver configurado. Devolve True
-    tanto quando tudo vai bem QUANTO quando esta simplesmente desligado (sem
-    credenciais) -- so devolve False quando esta configurado e algo falhou de
-    verdade, pra nao acender alarme falso em quem ainda nao conectou o Meta."""
-    if not settings.meta_access_token:
-        print("  meta ads: pulado (META_ACCESS_TOKEN nao configurado)")
+def _pode_sincronizar(fonte: str, pares: tuple[tuple[str, str], ...]) -> bool | None:
+    """Decide o que fazer quando uma integracao opcional nao tem credencial.
+
+    Devolve True quando da pra sincronizar; None quando a fonte esta declarada como
+    desligada (pula em silencio, rodada segue verde); False quando a credencial
+    sumiu sem ninguem declarar isso -- caso em que a rodada TEM que falhar.
+
+    O criterio antigo era "sem credencial = pulado = sucesso", e foi assim que o GA4
+    ficou 18 dias sem sincronizar com o agendador verde o tempo todo. Silencio nao
+    pode ser o comportamento padrao de uma fonte que deveria estar ligada: quem quer
+    rodar sem uma integracao declara isso em SYNC_FONTES_DESLIGADAS."""
+    faltando = [nome for nome, valor in pares if not valor]
+    if not faltando:
         return True
+
+    declaradas = {
+        f.strip().lower() for f in settings.sync_fontes_desligadas.split(",") if f.strip()
+    }
+    if fonte in declaradas:
+        print(f"  {fonte}: desligado de proposito (consta em SYNC_FONTES_DESLIGADAS)")
+        return None
+
+    print(
+        f"  {fonte}: FALHOU -- credencial ausente ({', '.join(faltando)}). "
+        f"Se e pra ficar desligado mesmo, adicione '{fonte}' em SYNC_FONTES_DESLIGADAS; "
+        f"caso contrario, reponha o secret no agendador."
+    )
+    return False
+
+
+def _sync_meta_ads(full: bool) -> bool:
+    """Sincroniza Meta Ads. Sem credencial, falha a rodada -- a menos que o Meta
+    esteja declarado em SYNC_FONTES_DESLIGADAS (ver `_pode_sincronizar`)."""
+    estado = _pode_sincronizar("meta_ads", (("META_ACCESS_TOKEN", settings.meta_access_token),))
+    if estado is not True:
+        return estado is None
 
     ok = True
     with session_scope() as db:
@@ -86,12 +114,17 @@ def _sync_meta_ads(full: bool) -> bool:
 
 
 def _sync_ga4(full: bool) -> bool:
-    """Sincroniza GA4 se as credenciais estiverem configuradas. Mesmo criterio de
-    `_sync_meta_ads`: True tanto quando da certo QUANTO quando esta simplesmente
-    desligado (sem credenciais) -- so False quando esta configurado e falhou."""
-    if not settings.ga4_property_id or not settings.ga4_service_account_json:
-        print("  ga4: pulado (GA4_PROPERTY_ID/GA4_SERVICE_ACCOUNT_JSON nao configurados)")
-        return True
+    """Sincroniza GA4. Sem credencial, falha a rodada -- a menos que o GA4 esteja
+    declarado em SYNC_FONTES_DESLIGADAS (ver `_pode_sincronizar`)."""
+    estado = _pode_sincronizar(
+        "ga4",
+        (
+            ("GA4_PROPERTY_ID", settings.ga4_property_id),
+            ("GA4_SERVICE_ACCOUNT_JSON", settings.ga4_service_account_json),
+        ),
+    )
+    if estado is not True:
+        return estado is None
 
     ok = True
     with session_scope() as db:
@@ -101,11 +134,17 @@ def _sync_ga4(full: bool) -> bool:
 
 
 def _sync_whatsapp_cost(full: bool) -> bool:
-    """Sincroniza o custo de mensageria do WhatsApp se as credenciais
-    estiverem configuradas. Mesmo criterio de `_sync_ga4`."""
-    if not settings.whatsapp_phone_number_id or not settings.whatsapp_access_token:
-        print("  whatsapp: pulado (WHATSAPP_PHONE_NUMBER_ID/WHATSAPP_ACCESS_TOKEN nao configurados)")
-        return True
+    """Sincroniza o custo de mensageria do WhatsApp. Mesmo criterio do GA4 e do
+    Meta: sem credencial a rodada falha, salvo declaracao explicita."""
+    estado = _pode_sincronizar(
+        "whatsapp",
+        (
+            ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
+            ("WHATSAPP_ACCESS_TOKEN", settings.whatsapp_access_token),
+        ),
+    )
+    if estado is not True:
+        return estado is None
 
     ok = True
     with session_scope() as db:

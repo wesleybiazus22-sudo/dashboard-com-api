@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # garante que "app"/"database" sejam importaveis
@@ -65,6 +66,23 @@ if overview_all.empty:
 for df in (overview_all, traffic_all, utm_all, pages_all, device_all, geo_all):
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
+
+# Aviso de atualidade. Entre 17/09 e 05/10/2026 a sincronizacao do GA4 ficou parada
+# 18 dias sem ninguem notar: a pagina mostra o periodo FILTRADO e nunca dizia de
+# quando era o dado mais recente, entao um grafico "normal" podia estar olhando pra
+# um retrato velho. O limite de 2 dias e proposital -- o GA4 consolida metricas com
+# algumas horas de atraso e o dia corrente nunca esta fechado, mas "anteontem" ja
+# deveria estar no banco em qualquer rodada saudavel.
+_ULTIMO_DIA = overview_all["date"].max().date()
+_ATRASO_DIAS = (date.today() - _ULTIMO_DIA).days
+if _ATRASO_DIAS >= 2:
+    st.warning(
+        f"⚠️ O dado mais recente do GA4 é de **{_ULTIMO_DIA.strftime('%d/%m/%Y')}** "
+        f"({_ATRASO_DIAS} dias atrás) — a sincronização pode ter parado. "
+        "Confira os secrets `GA4_PROPERTY_ID` e `GA4_SERVICE_ACCOUNT_JSON` no agendador. "
+        "Para reparar um intervalo maior que 8 dias, rode `python -m ingestion.sync_all full`: "
+        "a sincronização incremental só revisa os últimos 8 dias e deixaria o buraco aberto."
+    )
 
 # ---------------------------------------------------------------- Filtros
 with st.container(border=True):
