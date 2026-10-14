@@ -79,6 +79,22 @@ class MicrosoftCalendarClient:
         resposta.raise_for_status()
         return resposta.json()["access_token"]
 
+    def _request_sem_retry(self, method: str, path: str, *, extra_headers: dict | None = None, **kwargs) -> dict:
+        """UMA tentativa, sem retry -- usar so pra chamadas que NAO sao
+        seguras de repetir (POST que CRIA um recurso novo, ex: `criar_evento`).
+        Um retry automatico em cima de uma criacao e perigoso: se a primeira
+        tentativa chegou no Graph e foi processada, mas a RESPOSTA demorou ou
+        caiu antes de voltar pra nos, o retry cria um evento DUPLICADO --
+        incidente real em 2026-10-13, reuniao marcada de verdade enquanto o
+        agente continuava dizendo pro lead que tinha dado erro e oferecendo
+        outros horarios. Ver `criar_evento` e `buscar_evento_no_horario`."""
+        headers = {"Authorization": f"Bearer {self._access_token}", "Content-Type": "application/json"}
+        if extra_headers:
+            headers.update(extra_headers)
+        resposta = httpx.request(method, f"{_GRAPH_BASE_URL}{path}", headers=headers, timeout=30, **kwargs)
+        resposta.raise_for_status()
+        return resposta.json() if resposta.content else {}
+
     @retry(
         retry=retry_if_exception(_is_retryable),
         stop=stop_after_attempt(4),
@@ -86,15 +102,12 @@ class MicrosoftCalendarClient:
         reraise=True,
     )
     def _request(self, method: str, path: str, **kwargs) -> dict:
-        resposta = httpx.request(
-            method,
-            f"{_GRAPH_BASE_URL}{path}",
-            headers={"Authorization": f"Bearer {self._access_token}", "Content-Type": "application/json"},
-            timeout=30,
-            **kwargs,
-        )
-        resposta.raise_for_status()
-        return resposta.json() if resposta.content else {}
+        """COM retry automatico -- use so pra chamadas IDEMPOTENTES: leitura
+        (GET/consulta de disponibilidade) ou atualizacao que produz o MESMO
+        resultado final se repetida (PATCH de `atualizar_evento`, que so move
+        um evento que ja existe pro mesmo horario de novo). NUNCA usar aqui
+        pra criar um recurso novo -- ver `_request_sem_retry`."""
+        return self._request_sem_retry(method, path, **kwargs)
 
     def verificar_disponibilidade(self, email_organizador: str, inicio: datetime, fim: datetime) -> bool:
         """True se o intervalo [inicio, fim) estiver livre na agenda de
@@ -126,7 +139,12 @@ class MicrosoftCalendarClient:
         e-mail em `participantes` (ex: o lead, e/ou uma segunda pessoa da
         Maquina.ISP cruzada via MICROSOFT_CALENDAR_CROSS_MAP) entra como
         convidado obrigatorio -- o organizador ja fica incluso automaticamente
-        pelo proprio Graph, nao precisa (nem deve) estar nessa lista."""
+        pelo proprio Graph, nao precisa (nem deve) estar nessa lista.
+
+        IMPORTANTE: usa `_request_sem_retry` de proposito -- ver docstring
+        la. Se isso lancar excecao, quem chama (`_criar_evento_na_agenda` em
+        ingestion/llm/agent.py) reconfere com `buscar_evento_no_horario`
+        antes de assumir que realmente falhou."""
         payload: dict = {
             "subject": assunto,
             "body": {"contentType": "HTML", "content": corpo},
@@ -139,7 +157,37 @@ class MicrosoftCalendarClient:
             payload["attendees"] = [
                 {"emailAddress": {"address": email}, "type": "required"} for email in participantes
             ]
-        return self._request("POST", f"/users/{email_organizador}/events", json=payload)
+        return self._request_sem_retry("POST", f"/users/{email_organizador}/events", json=payload)
+
+    def buscar_evento_no_horario(
+        self, email_organizador: str, inicio: datetime, fim: datetime, assunto: str,
+    ) -> dict | None:
+        """Procura, na agenda de `email_organizador`, um evento que ja exista
+        pra esse intervalo com esse assunto exato -- usado SO pra reconferir
+        depois de uma falha em `criar_evento` (ver docstring la e em
+        `_request_sem_retry`), antes de desistir ou criar um segundo evento
+        em cima do mesmo horario. Devolve o evento (mesmo formato de
+        `criar_evento`) se achar, ou None se a agenda realmente nao tem nada
+        la.
+
+        Usa `calendarView` (intervalo fixo, leitura, seguro de repetir --
+        por isso passa por `_request`, COM retry) com o header `Prefer:
+        outlook.timezone` pra poder mandar o horario como hora local "crua",
+        igual ao resto do client (ver `_hora_local_sem_offset`), em vez de
+        converter pra UTC."""
+        resposta = self._request(
+            "GET",
+            f"/users/{email_organizador}/calendarView",
+            params={
+                "startDateTime": _hora_local_sem_offset(inicio),
+                "endDateTime": _hora_local_sem_offset(fim),
+            },
+            extra_headers={"Prefer": f'outlook.timezone="{_FUSO}"'},
+        )
+        for evento in resposta.get("value") or []:
+            if evento.get("subject") == assunto:
+                return evento
+        return None
 
     def atualizar_evento(self, *, email_organizador: str, evento_id: str, inicio: datetime, fim: datetime) -> dict:
         """Move um evento ja existente pro novo horario (PATCH -- so manda os

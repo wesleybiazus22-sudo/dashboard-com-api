@@ -107,6 +107,27 @@ def _horario_no_expediente(horario: datetime) -> tuple[bool, str | None]:
     return True, None
 
 
+def _parse_horario_brasil(horario_iso: str) -> datetime:
+    """Interpreta `horario_iso` (vindo do modelo) SEMPRE como horário de
+    Brasília: se a string já tiver um fuso (qualquer um), CONVERTE de verdade
+    pra America/Sao_Paulo (`.astimezone`, não só troca a etiqueta); se vier
+    sem fuso, assume que os números já são de Brasília. Usar isso em TODO
+    lugar que lê `horario_iso`/`novo_horario_iso` do modelo.
+
+    Antes, só o guardrail de horário comercial convertia de verdade
+    (`.astimezone`); a consulta de disponibilidade e a criação do evento só
+    trocavam a etiqueta quando vinha sem fuso (`.replace(tzinfo=...)`), sem
+    reconverter quando vinha COM um fuso diferente -- os dois lados podiam
+    divergir se o modelo alguma vez mandasse um offset que não fosse -03:00.
+    É a mesma classe do incidente de 2026-09-19 (reunião de 14h virou 11h na
+    agenda por causa do fuso), agora fechada de vez com uma única fonte de
+    verdade pra essa conversão."""
+    momento = datetime.fromisoformat(horario_iso)
+    if momento.tzinfo is None:
+        return momento.replace(tzinfo=_FUSO_BRASIL)
+    return momento.astimezone(_FUSO_BRASIL)
+
+
 def _primeiro_nome_lead(nome_completo: str | None) -> str | None:
     if nome_completo and nome_completo.strip():
         return nome_completo.strip().split()[0].capitalize()
@@ -344,9 +365,7 @@ def _horario_disponivel_nas_agendas(owner: CrmUser, horario_iso: str) -> tuple[b
     try:
         from ingestion.microsoft.client import MicrosoftCalendarClient
 
-        inicio = datetime.fromisoformat(horario_iso)
-        if inicio.tzinfo is None:
-            inicio = inicio.replace(tzinfo=_FUSO_BRASIL)
+        inicio = _parse_horario_brasil(horario_iso)
         fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
 
         client = MicrosoftCalendarClient()
@@ -409,65 +428,89 @@ def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, hor
     agenda ja foi checada em `_horario_disponivel_nas_agendas`, entao ela
     precisa estar de fato incluida no evento, nao so ter a disponibilidade
     consultada. Devolve o link da reuniao do Teams se der certo, ou None se
-    falhar por qualquer motivo (credencial, rede, horario invalido) -- nunca
-    deixa isso quebrar o fluxo principal, so cai pro fallback de criar uma
-    tarefa manual (ver `_executar_ferramenta`)."""
+    falhar de verdade (credencial, rede, horario invalido) -- antes de
+    desistir, RECONFERE no Graph se o evento nao foi criado mesmo assim (ver
+    MicrosoftCalendarClient.criar_evento: a chamada de criacao NAO tem retry
+    automatico de proposito, mas uma resposta lenta/cortada ainda pode
+    mascarar um sucesso real). Erro aqui nunca deve quebrar o fluxo
+    principal -- quem chama (`_executar_ferramenta`) cai pro fallback de
+    criar uma tarefa manual, e qualquer excecao nao prevista aqui ainda e
+    pega pelo guard generico em `conversar()`."""
     if not owner.email:
         return None
+
+    inicio = _parse_horario_brasil(horario_iso)
+    fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
+
+    from ingestion.microsoft.client import MicrosoftCalendarClient
+
+    client = MicrosoftCalendarClient()
+
+    participante_lead = None
+    deal = db.query(CrmDeal).filter(CrmDeal.rd_id == deal_rd_id).one_or_none()
+    if deal and deal.contact_rd_id:
+        contato = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
+        participante_lead = contato.email if contato else None
+
+    segunda_pessoa = _segunda_agenda_cruzada(owner.email)
+    participantes = list(dict.fromkeys(
+        email for email in (participante_lead, segunda_pessoa)
+        if email and email.strip().lower() != owner.email.strip().lower()
+    ))
+
+    # Titulo curto de proposito ("Empresa + Maquina ISP") -- o resumo
+    # detalhado (o que o lead contou, o que ele quer ver) fica so no corpo
+    # do evento e na tarefa do CRM (ver texto_tarefa em confirmar_reuniao),
+    # nao no titulo, que ficava enorme e dificil de ler na agenda. Calculado
+    # ANTES do try porque `_reconfirmar_evento_criado` precisa do mesmo
+    # assunto pra reconhecer o evento, caso precise ser usado.
+    nome_cliente = (deal.name if deal and deal.name else resumo).strip()
+    assunto = f"{nome_cliente} + Máquina ISP"[:250]
+
     try:
-        inicio = datetime.fromisoformat(horario_iso)
-        if inicio.tzinfo is None:
-            inicio = inicio.replace(tzinfo=_FUSO_BRASIL)
-        fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
-
-        from ingestion.microsoft.client import MicrosoftCalendarClient
-
-        client = MicrosoftCalendarClient()
-
-        participante_lead = None
-        deal = db.query(CrmDeal).filter(CrmDeal.rd_id == deal_rd_id).one_or_none()
-        if deal and deal.contact_rd_id:
-            contato = db.query(CrmContact).filter(CrmContact.rd_id == deal.contact_rd_id).one_or_none()
-            participante_lead = contato.email if contato else None
-
-        segunda_pessoa = _segunda_agenda_cruzada(owner.email)
-        participantes = list(dict.fromkeys(
-            email for email in (participante_lead, segunda_pessoa)
-            if email and email.strip().lower() != owner.email.strip().lower()
-        ))
-
-        # Titulo curto de proposito ("Empresa + Maquina ISP") -- o resumo
-        # detalhado (o que o lead contou, o que ele quer ver) fica so no corpo
-        # do evento e na tarefa do CRM (ver texto_tarefa em confirmar_reuniao),
-        # nao no titulo, que ficava enorme e dificil de ler na agenda.
-        nome_cliente = (deal.name if deal and deal.name else resumo).strip()
         evento = client.criar_evento(
             email_organizador=owner.email,
-            assunto=f"{nome_cliente} + Máquina ISP"[:250],
+            assunto=assunto,
             inicio=inicio,
             fim=fim,
             participantes=participantes or None,
             corpo=f"Reunião marcada automaticamente pelo agente {NOME_AGENTE}.<br>{resumo}",
         )
+    except Exception:  # noqa: BLE001 -- ver docstring de MicrosoftCalendarClient.criar_evento:
+        # a chamada pode ter CRIADO o evento de verdade no Graph mesmo tendo
+        # lancado excecao aqui (resposta lenta/cortada depois do Graph ja ter
+        # processado) -- reconfere antes de reportar falha, pra nunca dizer
+        # pro lead que nao deu certo quando, por baixo, deu (incidente real
+        # em 2026-10-13: reuniao criada as 23:41:10, mas o agente continuou
+        # dizendo "problema tecnico" e oferecendo outros horarios).
+        logger.exception(
+            "Agente: falha ao criar evento na agenda pra negociação %s -- reconferindo antes de desistir.",
+            deal_rd_id,
+        )
+        try:
+            evento = client.buscar_evento_no_horario(owner.email, inicio, fim, assunto)
+        except Exception:  # noqa: BLE001 -- reconferencia tambem pode falhar, nao pode quebrar o fluxo
+            logger.exception("Agente: falha ao reconferir evento pra negociação %s.", deal_rd_id)
+            evento = None
+        if not evento:
+            return None
 
-        # Guarda o ID do evento pra `reagendar_reuniao` conseguir mover ele de
-        # verdade depois -- sem isso nao ha como reencontrar o evento no Graph
-        # a partir so do deal_rd_id.
-        evento_id = evento.get("id")
-        if evento_id:
-            registro = db.query(AgendaEventoMicrosoft).filter(AgendaEventoMicrosoft.deal_rd_id == deal_rd_id).one_or_none()
-            if registro is None:
-                registro = AgendaEventoMicrosoft(deal_rd_id=deal_rd_id)
-                db.add(registro)
-            registro.email_organizador = owner.email
-            registro.evento_id = evento_id
-            registro.web_link = evento.get("webLink")
-            registro.atualizado_em = datetime.now(timezone.utc)
-            db.commit()
+    # Guarda o ID do evento pra `reagendar_reuniao` conseguir mover ele de
+    # verdade depois -- sem isso nao ha como reencontrar o evento no Graph
+    # a partir so do deal_rd_id.
+    evento_id = evento.get("id")
+    if evento_id:
+        registro = db.query(AgendaEventoMicrosoft).filter(AgendaEventoMicrosoft.deal_rd_id == deal_rd_id).one_or_none()
+        if registro is None:
+            registro = AgendaEventoMicrosoft(deal_rd_id=deal_rd_id)
+            db.add(registro)
+        registro.email_organizador = owner.email
+        registro.evento_id = evento_id
+        registro.web_link = evento.get("webLink")
+        registro.atualizado_em = datetime.now(timezone.utc)
+        db.commit()
 
-        return (evento.get("onlineMeeting") or {}).get("joinUrl")
-    except Exception:  # noqa: BLE001 -- fallback pra tarefa manual, nunca quebra a conversa
-        return None
+    return (evento.get("onlineMeeting") or {}).get("joinUrl")
 
 
 def _mover_evento_na_agenda(db: Session, *, deal_rd_id: str, novo_horario_iso: str) -> bool:
@@ -481,9 +524,7 @@ def _mover_evento_na_agenda(db: Session, *, deal_rd_id: str, novo_horario_iso: s
     if not registro:
         return False
     try:
-        inicio = datetime.fromisoformat(novo_horario_iso)
-        if inicio.tzinfo is None:
-            inicio = inicio.replace(tzinfo=_FUSO_BRASIL)
+        inicio = _parse_horario_brasil(novo_horario_iso)
         fim = inicio + timedelta(minutes=_DURACAO_REUNIAO_MINUTOS)
 
         from ingestion.microsoft.client import MicrosoftCalendarClient
@@ -551,10 +592,8 @@ def _executar_ferramenta(
         horario_iso = entrada.get("horario_iso", "")
         resumo = entrada.get("resumo", "")
 
-        horario_pedido = datetime.fromisoformat(horario_iso)
-        if horario_pedido.tzinfo is None:
-            horario_pedido = horario_pedido.replace(tzinfo=_FUSO_BRASIL)
-        dentro_do_expediente, motivo_fora = _horario_no_expediente(horario_pedido.astimezone(_FUSO_BRASIL))
+        horario_pedido = _parse_horario_brasil(horario_iso)
+        dentro_do_expediente, motivo_fora = _horario_no_expediente(horario_pedido)
         if not dentro_do_expediente:
             return (
                 f"[FORA DO HORÁRIO COMERCIAL -- {motivo_fora}, nada foi alterado no CRM/agenda] "
@@ -591,9 +630,7 @@ def _executar_ferramenta(
             # e o due_at que scripts/enviar_lembretes_reuniao.py le pra disparar
             # os lembretes automaticos, tanto pra reuniao confirmada pelo agente
             # quanto pra marcada manualmente pela SDR.
-            horario_reuniao = datetime.fromisoformat(horario_iso)
-            if horario_reuniao.tzinfo is None:
-                horario_reuniao = horario_reuniao.replace(tzinfo=_FUSO_BRASIL)
+            horario_reuniao = _parse_horario_brasil(horario_iso)
 
             if link_teams:
                 texto_tarefa = f"Reunião criada automaticamente na agenda pelo agente {NOME_AGENTE}: {resumo}. Link: {link_teams}"
@@ -619,10 +656,8 @@ def _executar_ferramenta(
         novo_horario_iso = entrada.get("novo_horario_iso", "")
         resumo = entrada.get("resumo", "")
 
-        novo_horario_pedido = datetime.fromisoformat(novo_horario_iso)
-        if novo_horario_pedido.tzinfo is None:
-            novo_horario_pedido = novo_horario_pedido.replace(tzinfo=_FUSO_BRASIL)
-        dentro_do_expediente, motivo_fora = _horario_no_expediente(novo_horario_pedido.astimezone(_FUSO_BRASIL))
+        novo_horario_pedido = _parse_horario_brasil(novo_horario_iso)
+        dentro_do_expediente, motivo_fora = _horario_no_expediente(novo_horario_pedido)
         if not dentro_do_expediente:
             return (
                 f"[FORA DO HORÁRIO COMERCIAL -- {motivo_fora}, nada foi alterado no CRM/agenda] "
@@ -657,9 +692,7 @@ def _executar_ferramenta(
                 "verificar e chame encaminhar_para_humano."
             )
 
-        novo_horario = datetime.fromisoformat(novo_horario_iso)
-        if novo_horario.tzinfo is None:
-            novo_horario = novo_horario.replace(tzinfo=_FUSO_BRASIL)
+        novo_horario = _parse_horario_brasil(novo_horario_iso)
 
         owner = _dono_da_negociacao(db, deal_rd_id)
         if owner and _pode_usar_calendario():

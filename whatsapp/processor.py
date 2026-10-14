@@ -33,6 +33,7 @@ log, nunca uma excecao que propaga.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -43,6 +44,17 @@ from ingestion.llm.agent import conversar
 from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
 
 logger = logging.getLogger(__name__)
+
+# Janela de debounce pra rajada de mensagens do mesmo numero (ver
+# `_ainda_e_a_mais_recente` / `_responder_com_agente`) -- visto em producao
+# em 2026-10-13: lead manda 3 mensagens seguidas em poucos segundos ("Oi" /
+# "sim, pode!" / "Quero saber mais"), cada uma dispara um turno de agente
+# INDEPENDENTE, gerando 3 respostas de abertura quase identicas, uma atras
+# da outra. Nao e tempo suficiente pro lead perceber que esta "conversando
+# com 3 agentes ao mesmo tempo", mas e osso: o agente perde o fio de quem
+# respondeu o que. 3s cobre rajada de digitacao rapida sem atrasar
+# perceptivelmente quem manda so uma mensagem por vez.
+_DEBOUNCE_SEGUNDOS = 3
 
 
 def _parse_timestamp(valor) -> datetime:
@@ -219,6 +231,23 @@ def _lead_de_trafego_pago(db: Session, deal: CrmDeal | None) -> bool:
     return False
 
 
+def _ainda_e_a_mais_recente(db: Session, phone_number: str, wamid: str) -> bool:
+    """True se `wamid` ainda for a ultima mensagem INBOUND recebida desse
+    numero -- usado pra debounce de rajada (ver `_responder_com_agente` e
+    `_DEBOUNCE_SEGUNDOS`). Se chegou mensagem mais nova enquanto esperavamos,
+    deixa ela processar o lote inteiro (o historico que ela vai carregar ja
+    inclui essa mensagem aqui, ver `_carregar_historico`) em vez de duas
+    chamadas ao agente responderem em paralelo pra mensagens que, pro lead,
+    foram uma unica rajada de pensamento."""
+    ultima = (
+        db.query(WhatsappMessage.wamid)
+        .filter(WhatsappMessage.phone_number == phone_number, WhatsappMessage.direction == "inbound")
+        .order_by(WhatsappMessage.occurred_at.desc())
+        .first()
+    )
+    return ultima is not None and ultima[0] == wamid
+
+
 def _agente_ja_engajou(db: Session, phone_number: str) -> bool:
     """True se o agente ja mandou pelo menos uma mensagem pra esse telefone --
     ou seja, a conversa ja esta em andamento (nao e mais primeiro contato)."""
@@ -291,6 +320,22 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             WhatsappClient().mark_as_read(wamid_recebido, mostrar_digitando=True)
         except Exception:  # noqa: BLE001 -- so cosmetico, nunca pode travar a resposta de verdade
             logger.exception("Agente: falha ao marcar como lida/mostrar 'digitando' (wamid=%s).", wamid_recebido)
+
+        # Debounce de rajada (ver `_DEBOUNCE_SEGUNDOS`): espera um instante e,
+        # se chegou mensagem mais nova desse mesmo numero nesse meio tempo,
+        # desiste -- a mensagem mais nova vai processar o lote inteiro (o
+        # historico dela ja inclui essa aqui). Sem isso, 3 mensagens seguidas
+        # do lead disparavam 3 turnos de agente em paralelo, cada um sem ver
+        # as outras duas, gerando respostas quase identicas uma atras da
+        # outra (visto em producao em 2026-10-13).
+        time.sleep(_DEBOUNCE_SEGUNDOS)
+        if not _ainda_e_a_mais_recente(db, phone_number, wamid_recebido):
+            logger.info(
+                "Agente: mensagem %s (numero %s) nao e mais a mais recente apos debounce de %ss -- "
+                "deixando a mensagem seguinte processar o lote.",
+                wamid_recebido, phone_number, _DEBOUNCE_SEGUNDOS,
+            )
+            return
 
         historico = _carregar_historico(db, phone_number, exceto_wamid=wamid_recebido)
         deal_rd_id = deal.rd_id if deal else None
