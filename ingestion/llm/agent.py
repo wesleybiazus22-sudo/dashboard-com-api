@@ -10,31 +10,42 @@ agente) -- poucas ferramentas, bem definidas:
   - sinalizar_interesse: o lead demonstrou interesse em avancar, mas AINDA
     NAO confirmou um horario -- move a negociacao pra etapa "Interesse
     Identificado" do pipeline [Maquina ISP] - Qualificacao.
-  - confirmar_reuniao: o lead confirmou um horario especifico. Se o Microsoft
-    Graph estiver configurado, PRIMEIRO checa se o horario esta livre na
-    agenda do dono da negociacao e, se houver uma segunda pessoa mapeada em
-    MICROSOFT_CALENDAR_CROSS_MAP pra esse dono, na agenda dela tambem -- se
-    QUALQUER uma estiver ocupada, nao confirma nada (nem move de etapa) e
-    pede um novo horario ao lead. Com as agendas livres (ou sem integracao
-    configurada), move a negociacao pra "Reuniao Agendada" e cria o evento de
-    verdade com link do Teams; sem a integracao, so cria uma tarefa pra um
-    humano criar a agenda manualmente.
-  - reagendar_reuniao: o lead JA TEM reuniao marcada e pede pra mudar
+  - transferir_para_consultora: o lead topou marcar a reuniao/demonstracao
+    (com ou sem horario especifico). O agente NAO tenta mais marcar horario
+    direto (ver decisao de 2026-10-15 abaixo) -- so cria uma tarefa tipo
+    'call' pro dono da negociacao (normalmente a consultora Miria) ligar/
+    chamar no WhatsApp e combinar o horario com o lead.
+  - reagendar_reuniao: o lead JA TEM reuniao marcada (etapa "Reuniao
+    Agendada", marcada manualmente pela consultora) e pede pra mudar
     dia/horario (inclusive respondendo a um lembrete automatico). Atualiza
     `due_at` da tarefa tipo 'meeting' no RD (fonte de verdade lida por
-    scripts/enviar_lembretes_reuniao.py) e, se a reuniao original foi criada
-    por este agente (tem evento registrado em AgendaEventoMicrosoft), move o
-    evento DE VERDADE no Outlook/Teams. Reuniao marcada manualmente pela SDR
-    (sem evento registrado) cai no fallback de avisar um humano pra ajustar.
+    scripts/enviar_lembretes_reuniao.py) e, se houver um evento registrado
+    em AgendaEventoMicrosoft pra essa negociacao, move o evento DE VERDADE
+    no Outlook/Teams. Sem evento registrado (caso comum agora que a marcacao
+    e manual), cai no fallback de avisar um humano pra ajustar.
   - encaminhar_para_humano: qualquer coisa que o agente NAO deve decidir
-    sozinho -- acima de tudo, negociacao de preco/desconto (regra explicita
-    do dono do produto: o agente nunca inventa nem estima mensalidade).
+    sozinho -- ex: pedido de desconto/condicao fora da tabela padrao, duvida
+    que a base de conhecimento nao cobre. Preco em si (ver tabela real em
+    ingestion/llm/knowledge_base_seed.py) o agente informa direto desde
+    2026-10-15 -- so NUNCA inventa um valor fora da tabela.
 
-Todas as ferramentas de acao (sinalizar_interesse, confirmar_reuniao,
-encaminhar_para_humano) so mexem no CRM/agenda DE VERDADE quando ha um
-`deal_rd_id` real E `modo_teste=False` -- uma conversa de teste (sem
-negociacao real por tras) nunca aciona nada fora do proprio teste, mesmo que
-o modelo "decida" chamar a ferramenta. Ver `conversar()` mais abaixo.
+DECISAO DE 2026-10-15 -- por que nao marca mais horario direto: o agente
+tentava checar disponibilidade real e criar o evento no Microsoft Graph
+dentro da propria conversa, mas o volume de erro (respostas lentas/timeout
+tratadas como falha, ver commit de correcao de retry em
+ingestion/microsoft/client.py) fazia ele "se perder" com o lead -- dizer que
+deu erro enquanto a reuniao as vezes tinha sido criada de verdade por baixo.
+Em vez de continuar endurecendo esse caminho, o agendamento em si virou
+responsabilidade humana: o agente so sinaliza interesse e transfere pra
+consultora: `_criar_evento_na_agenda`, `_proximos_horarios_livres` e
+`_formatar_horarios_livres` ficam sem uso por enquanto (nao removidas,
+intencional -- reaproveitar se o auto-agendamento for retomado no futuro).
+
+Todas as ferramentas de acao (sinalizar_interesse, transferir_para_consultora,
+reagendar_reuniao, encaminhar_para_humano) so mexem no CRM/agenda DE VERDADE
+quando ha um `deal_rd_id` real E `modo_teste=False` -- uma conversa de teste
+(sem negociacao real por tras) nunca aciona nada fora do proprio teste, mesmo
+que o modelo "decida" chamar a ferramenta. Ver `conversar()` mais abaixo.
 """
 
 from __future__ import annotations
@@ -85,9 +96,9 @@ _DIAS_SEMANA_PT = [
 
 def _horario_no_expediente(horario: datetime) -> tuple[bool, str | None]:
     """Confere o guardrail de horario comercial (ver _EXPEDIENTE_*). Devolve
-    (valido, motivo_se_invalido) -- checado pra QUALQUER horario de reuniao
-    antes de mexer no CRM/agenda, tanto em confirmar_reuniao quanto em
-    reagendar_reuniao."""
+    (valido, motivo_se_invalido) -- checado antes de mexer no CRM/agenda em
+    `reagendar_reuniao` (a marcacao inicial, desde 2026-10-15, e feita pela
+    consultora manualmente -- ver `transferir_para_consultora`)."""
     if horario.weekday() >= 5:  # sabado=5, domingo=6
         return False, "não marcamos reunião aos fins de semana"
     if horario.time() < _EXPEDIENTE_INICIO or horario.time() > _EXPEDIENTE_FIM:
@@ -159,12 +170,11 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - ENTENDA O CENÁRIO ANTES DE EMPURRAR PRODUTO OU REUNIÃO: assim que o lead disser que quer saber mais (a primeira resposta de verdade da conversa), pergunte -- numa pergunta só, natural, sem parecer formulário -- quantos assinantes o provedor tem e qual ERP/sistema usa, ANTES de espichar o pitch do produto ou propor horário. Isso faz cada resposta seguinte (inclusive o convite pra reunião, quando chegar a hora) soar sob medida pro provedor dele, não um discurso pronto que serviria pra qualquer um.
 - Use a ferramenta `consultar_base_conhecimento` sempre que precisar de um fato sobre o produto (o que cada agente faz, como funciona a implementação, integrações, teste grátis, etc.) antes de responder -- nunca invente ou "chute" uma informação sobre o produto.
 - Se a base de conhecimento não trouxer a resposta pra alguma pergunta, admita com naturalidade que vai confirmar, e chame `encaminhar_para_humano`. Não invente.
-- REGRA INEGOCIÁVEL: você NUNCA informa, estima ou sugere um valor de mensalidade/preço, mesmo que o lead insista, peça "só uma faixa", ou diga que só decide sabendo o preço. Toda vez que o lead tocar em preço/valor/desconto/condição de pagamento: (1) diga com naturalidade que o valor é justamente o que se esclarece NA REUNIÃO com um consultor, olhando o tamanho e o cenário do provedor dele -- não é algo que se define por mensagem; (2) pode adiantar que tem 60 dias de teste sem custo de implementação; (3) chame `encaminhar_para_humano`; e (4) use isso como o gancho natural pra propor a reunião (ou reforçar a que já foi proposta) -- a reunião não é uma coisa separada de "alguém vai te chamar", ela É onde a resposta de preço está. Nunca deixe a pergunta de preço "no ar" tipo só "vou chamar o time comercial" sem amarrar isso à reunião.
-- FLUXO DE REUNIÃO EM TRÊS ETAPAS -- não pule etapa, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse`; (2) em seguida chame `consultar_horarios_disponiveis` e apresente 2-3 das opções REAIS que ela devolver (ex: "Tenho livre segunda às 9h ou 14h, ou terça às 10h30 -- alguma dessas funciona?") -- NUNCA pergunte "manhã ou tarde funciona melhor?" de forma vaga, e NUNCA chute um horário sem consultar antes; (3) quando o lead confirmar uma das opções, chame `confirmar_reuniao` com esse horário exato -- se ele pedir um dia/horário diferente das opções (ex: "pode ser segunda" sem mais detalhe, ou um horário específico não oferecido), chame `consultar_horarios_disponiveis` de novo com `a_partir_de_iso` nesse dia pra achar um horário real por perto, em vez de aceitar cego.
-- Nunca chame `confirmar_reuniao` sem antes ter consultado `consultar_horarios_disponiveis` pra esse horário -- vale mesmo quando o lead já chega propondo um dia específico. E nunca chame `confirmar_reuniao` sem o lead ter confirmado explicitamente um horário concreto -- "quero saber mais" ou "topo uma reunião" sem horário é `sinalizar_interesse`, não `confirmar_reuniao`.
-- HORÁRIO COMERCIAL: só marcamos (ou reagendamos) reunião de segunda a sexta, entre 09:00 e 17:00 (horário de Brasília), fora do intervalo de almoço (12:00 às 13:30) -- nunca aos fins de semana. `consultar_horarios_disponiveis` já respeita tudo isso sozinha; se mesmo assim o lead insistir num horário fora dessa janela, não confirme -- explique com naturalidade e ofereça uma alternativa real via `consultar_horarios_disponiveis`.
-- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo oferecido horários antes), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" ou repetir os mesmos horários de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
-- Se o lead JÁ TEM uma reunião marcada (às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário -- não `confirmar_reuniao` de novo.
+- REGRA DE PREÇO (mudou em 2026-10-15 -- agora você PODE informar valor real): quando o lead perguntar sobre mensalidade/preço/investimento, chame `consultar_base_conhecimento` pela tabela de preços real e informe a mensalidade E o setup da faixa que bate com o número de assinantes que ele já te disse. Se ele ainda não disse quantos assinantes tem, pergunte isso primeiro -- sem isso você não sabe qual faixa citar, e NUNCA deve chutar ou arredondar um valor de cabeça. Depois do valor, reforce o que reduz o risco pra ele: 60 dias de teste sem custo de implementação. O gancho real pra reunião não é "o valor pode ser menor" (nunca prometa isso -- não é verdade) -- é que na reunião com a consultora dá pra ajustar forma de pagamento, prazo de contrato e timing do setup conforme o cenário dele. Use isso, não um desconto inventado, como motivo genuíno pra levar a conversa pra lá. NUNCA informe um valor que não esteja na tabela recuperada pela ferramenta.
+- FLUXO DE REUNIÃO EM DUAS ETAPAS -- não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, pedir pra "ver funcionando"), mas AINDA sem confirmar que quer marcar a demonstração, chame `sinalizar_interesse`; (2) quando o lead topar marcar a reunião/demonstração de verdade (mesmo sem dar horário nenhum -- você não marca horário direto, não pergunte "qual horário funciona melhor"), chame `transferir_para_consultora`. Você NÃO tem acesso a agenda nem marca horário sozinho -- isso é sempre com a consultora.
+- Depois de chamar `transferir_para_consultora`, a mensagem pro lead é sempre nessa linha: avise com naturalidade que a consultora de negócios (o nome exato vem no resultado da ferramenta) vai entrar em contato em breve pra combinar o melhor horário pra demonstração -- nunca prometa um horário específico, nunca diga "te chamo daqui a X minutos", só que ela vai entrar em contato.
+- NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo transferido pra consultora), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
+- Se o lead JÁ TEM uma reunião marcada (a consultora combinou um horário com ele, ou às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário.
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
 
 
@@ -222,54 +232,23 @@ _TOOLS = [
         },
     },
     {
-        "name": "consultar_horarios_disponiveis",
+        "name": "transferir_para_consultora",
         "description": (
-            "Consulta a agenda de verdade (Microsoft Graph) e devolve os próximos horários "
-            "REALMENTE livres pra propor ao lead -- já pula fim de semana, horário fora do "
-            "expediente e horário no intervalo de almoço automaticamente. Chame isso SEMPRE "
-            "antes de propor qualquer dia/horário de reunião (inclusive quando o lead já "
-            "chegar sugerindo um dia, tipo 'pode ser segunda') -- nunca pergunte 'manhã ou "
-            "tarde funciona melhor?' de forma vaga nem chute um horário sem checar antes."
+            "Chame quando o lead topar marcar a reunião/demonstração -- mesmo sem dar um "
+            "horário específico. O agente NÃO marca horário direto mais (gerava erro "
+            "demais tentando bater com a agenda real) -- em vez disso, cria uma tarefa "
+            "pra nossa consultora de negócios entrar em contato e combinar o melhor "
+            "horário com o lead."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "a_partir_de_iso": {
-                    "type": "string",
-                    "description": (
-                        "Data (só a data, formato YYYY-MM-DD) a partir da qual buscar horários -- "
-                        "use quando o lead já mencionou um dia preferido (ex: 'semana que vem', "
-                        "'segunda'). Omita pra buscar a partir de agora."
-                    ),
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "confirmar_reuniao",
-        "description": (
-            "Chame SÓ quando o lead confirmar um horário ESPECÍFICO pra reunião/"
-            "demonstração (dia e período/hora). Move a negociação pra 'Reunião "
-            "Agendada' e cria o compromisso de verdade na agenda de quem vai atender."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "horario_iso": {
-                    "type": "string",
-                    "description": (
-                        "Data e hora combinadas, formato ISO-8601 com offset de fuso "
-                        "(ex: '2026-09-08T09:00:00-03:00'). Calcule a partir da data/hora "
-                        "atual informada no início deste prompt."
-                    ),
-                },
                 "resumo": {
                     "type": "string",
-                    "description": "Resumo curto do combinado (pontos de interesse do lead, contexto pra reunião).",
+                    "description": "Resumo curto do que o lead quer ver na demonstração / contexto combinado.",
                 },
             },
-            "required": ["horario_iso", "resumo"],
+            "required": ["resumo"],
         },
     },
     {
@@ -277,8 +256,7 @@ _TOOLS = [
         "description": (
             "Chame quando o lead JÁ TEM uma reunião marcada (negociação na etapa "
             "'Reunião Agendada') e pedir pra mudar o dia/horário -- inclusive em resposta "
-            "a um lembrete automático de reunião. Atualiza o horário da reunião no CRM; "
-            "NÃO chame confirmar_reuniao de novo nesse caso."
+            "a um lembrete automático de reunião. Atualiza o horário da reunião no CRM."
         ),
         "input_schema": {
             "type": "object",
@@ -299,9 +277,10 @@ _TOOLS = [
     {
         "name": "encaminhar_para_humano",
         "description": (
-            "Chame sempre que o lead perguntar sobre preço/valor/desconto/condição de "
-            "pagamento, ou fizer uma pergunta que a base de conhecimento não cobre. "
-            "Registra a necessidade de um humano assumir esse ponto da conversa."
+            "Chame quando o lead pedir desconto/condição especial fora da tabela de preços "
+            "padrão, ou fizer uma pergunta que a base de conhecimento não cobre. Preço em si "
+            "(mensalidade/setup da tabela) você informa direto, não precisa encaminhar só por "
+            "isso. Registra a necessidade de um humano assumir esse ponto da conversa."
         ),
         "input_schema": {
             "type": "object",
@@ -421,7 +400,12 @@ def _formatar_horarios_livres(horarios: list[datetime]) -> str:
 
 
 def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, horario_iso: str, resumo: str) -> str | None:
-    """Tenta criar o evento de verdade na agenda do dono da negociacao via
+    """SEM USO desde 2026-10-15 (nenhuma ferramenta chama mais isso -- ver
+    decisao no topo do arquivo e `transferir_para_consultora`). Mantida de
+    proposito, nao removida: reaproveitar aqui se o auto-agendamento pela
+    propria conversa for retomado no futuro, ja validada contra o Graph real.
+
+    Tenta criar o evento de verdade na agenda do dono da negociacao via
     Microsoft Graph. Convida o lead (quando o e-mail dele e conhecido) e,
     se houver uma segunda pessoa mapeada pra esse dono (ver
     `_segunda_agenda_cruzada`), convida ela tambem -- e a mesma pessoa cuja
@@ -460,10 +444,9 @@ def _criar_evento_na_agenda(db: Session, *, deal_rd_id: str, owner: CrmUser, hor
 
     # Titulo curto de proposito ("Empresa + Maquina ISP") -- o resumo
     # detalhado (o que o lead contou, o que ele quer ver) fica so no corpo
-    # do evento e na tarefa do CRM (ver texto_tarefa em confirmar_reuniao),
-    # nao no titulo, que ficava enorme e dificil de ler na agenda. Calculado
-    # ANTES do try porque `_reconfirmar_evento_criado` precisa do mesmo
-    # assunto pra reconhecer o evento, caso precise ser usado.
+    # do evento, nao no titulo, que ficava enorme e dificil de ler na agenda.
+    # Calculado ANTES do try porque `buscar_evento_no_horario` precisa do
+    # mesmo assunto pra reconhecer o evento, se precisar ser usado.
     nome_cliente = (deal.name if deal and deal.name else resumo).strip()
     assunto = f"{nome_cliente} + Máquina ISP"[:250]
 
@@ -560,96 +543,45 @@ def _executar_ferramenta(
         mover_negociacao_para_etapa(db, deal_rd_id, settings.rd_stage_interesse_identificado_rd_id)
         return "Interesse registrado no CRM com sucesso."
 
-    if nome == "consultar_horarios_disponiveis":
-        a_partir_de_iso = entrada.get("a_partir_de_iso") or ""
-        if modo_teste or not deal_rd_id:
-            return (
-                "[MODO TESTE -- sem negociação real pra consultar agenda] Simule 2-3 horários "
-                "plausíveis dentro do expediente (seg-sex, 09:00-17:00, fora do almoço 12:00-13:30) "
-                "e proponha como se fossem reais."
-            )
-        owner = _dono_da_negociacao(db, deal_rd_id)
-        if not owner or not _pode_usar_calendario():
-            return (
-                "Integração de agenda não disponível agora -- pergunte ao lead qual dia/período "
-                "prefere e chame confirmar_reuniao quando ele der um horário específico."
-            )
-        a_partir_de = None
-        if a_partir_de_iso:
-            try:
-                a_partir_de = date.fromisoformat(a_partir_de_iso[:10])
-            except ValueError:
-                a_partir_de = None
-        horarios = _proximos_horarios_livres(owner, a_partir_de=a_partir_de)
-        if not horarios:
-            return (
-                "Não achei nenhum horário livre nos próximos dias -- avise o lead com naturalidade "
-                "e peça pra ele sugerir um dia específico, ou chame encaminhar_para_humano."
-            )
-        return "Horários realmente livres na agenda:\n" + _formatar_horarios_livres(horarios)
-
-    if nome == "confirmar_reuniao":
-        horario_iso = entrada.get("horario_iso", "")
+    if nome == "transferir_para_consultora":
         resumo = entrada.get("resumo", "")
-
-        horario_pedido = _parse_horario_brasil(horario_iso)
-        dentro_do_expediente, motivo_fora = _horario_no_expediente(horario_pedido)
-        if not dentro_do_expediente:
-            return (
-                f"[FORA DO HORÁRIO COMERCIAL -- {motivo_fora}, nada foi alterado no CRM/agenda] "
-                "Explique isso pro lead com naturalidade e peça um horário dentro do expediente "
-                "(segunda a sexta, 09:00 às 17:00)."
-            )
-
         if modo_teste or not deal_rd_id:
             return (
-                "[MODO TESTE -- nada foi alterado no CRM/agenda] Em produção, a negociação "
-                f"seria movida pra 'Reunião Agendada' e o evento seria criado pra {horario_iso}. "
-                f"Resumo: {resumo}"
+                "[MODO TESTE -- nada foi alterado no CRM] Em produção, uma tarefa seria criada "
+                f"pra nossa consultora de negócios ligar/chamar no WhatsApp e combinar o horário "
+                f"com o lead. Resumo: {resumo}"
             )
 
         owner = _dono_da_negociacao(db, deal_rd_id)
-
-        if owner and _pode_usar_calendario():
-            disponivel, motivo_ocupado = _horario_disponivel_nas_agendas(owner, horario_iso)
-            if not disponivel:
-                return (
-                    f"Esse horário NÃO está disponível ({motivo_ocupado}) -- a negociação NÃO foi "
-                    "movida pra 'Reunião Agendada'. Explique isso pro lead com naturalidade e peça "
-                    "pra ele sugerir outro dia/horário."
-                )
-
-        mover_negociacao_para_etapa(db, deal_rd_id, settings.meta_capi_trigger_stage_rd_id)
-
-        link_teams = None
-        if owner and _pode_usar_calendario():
-            link_teams = _criar_evento_na_agenda(db, deal_rd_id=deal_rd_id, owner=owner, horario_iso=horario_iso, resumo=resumo)
-
-        if owner:
-            # `prazo` precisa ser o horario REAL da reuniao (nao "daqui a 1h") --
-            # e o due_at que scripts/enviar_lembretes_reuniao.py le pra disparar
-            # os lembretes automaticos, tanto pra reuniao confirmada pelo agente
-            # quanto pra marcada manualmente pela SDR.
-            horario_reuniao = _parse_horario_brasil(horario_iso)
-
-            if link_teams:
-                texto_tarefa = f"Reunião criada automaticamente na agenda pelo agente {NOME_AGENTE}: {resumo}. Link: {link_teams}"
-            else:
-                texto_tarefa = f"Criar a agenda pra reunião confirmada pelo agente {NOME_AGENTE} ({horario_iso}): {resumo}"
-            criar_tarefa(
-                db,
-                deal_rd_id,
-                tipo="meeting",
-                texto=texto_tarefa,
-                responsavel_rd_id=owner.rd_id,
-                criado_por_rd_id=owner.rd_id,
-                prazo=horario_reuniao,
+        if not owner:
+            return (
+                "Não encontrei quem é o responsável por essa negociação pra criar a tarefa -- "
+                "avise o lead com naturalidade que alguém do nosso time comercial vai entrar em "
+                "contato em breve pra agendar, e chame encaminhar_para_humano."
             )
+
+        nome_consultora = _primeiro_nome_lead(owner.name) or "nossa consultora de negócios"
+
+        # tipo="call", NUNCA "meeting" -- scripts/enviar_lembretes_reuniao.py le
+        # tarefa tipo 'meeting' como se fosse uma reuniao JA CONFIRMADA num
+        # horario certo (due_at = horario da reuniao) pra disparar lembrete
+        # automatico; essa tarefa aqui e so "ligar pra combinar", ainda nao tem
+        # horario de reuniao nenhum -- marcar como 'meeting' dispararia um
+        # lembrete de reuniao falso.
+        criar_tarefa(
+            db,
+            deal_rd_id,
+            tipo="call",
+            texto=f"Lead topou agendar demonstração -- ligar/chamar no WhatsApp pra combinar o horário. Resumo: {resumo}",
+            responsavel_rd_id=owner.rd_id,
+            criado_por_rd_id=owner.rd_id,
+            prazo=datetime.now(_FUSO_BRASIL) + timedelta(hours=2),
+        )
 
         return (
-            f"Reunião registrada no CRM com sucesso, evento criado na agenda com link do Teams: {link_teams}"
-            if link_teams
-            else "Reunião registrada no CRM com sucesso. Tarefa criada pra um humano montar a agenda (integração de calendário ainda não ativa)."
+            f"Tarefa criada pra {nome_consultora} ligar e combinar o horário. Avise o lead com "
+            f"naturalidade que a {nome_consultora}, nossa consultora de negócios, vai entrar em "
+            "contato em breve pra agendar o melhor horário pra demonstração do produto."
         )
 
     if nome == "reagendar_reuniao":
@@ -714,11 +646,12 @@ def _executar_ferramenta(
 
         # A tarefa em si (crm_tasks.due_at) e a fonte de verdade lida pelos
         # lembretes automaticos -- atualizando ela, o proximo ciclo de lembrete
-        # ja passa a valer pro novo horario sozinho. Se a reuniao original foi
-        # criada por `confirmar_reuniao` (tem evento registrado em
-        # AgendaEventoMicrosoft), move o evento DE VERDADE no Outlook/Teams;
-        # senao (ex: reuniao marcada manualmente pela SDR), cai no fallback de
-        # avisar um humano pra ajustar.
+        # ja passa a valer pro novo horario sozinho. Se por acaso essa
+        # negociacao tiver um evento registrado em AgendaEventoMicrosoft
+        # (marcacao antiga, de antes de 2026-10-15), move o evento DE VERDADE
+        # no Outlook/Teams; senao (caso comum agora, reuniao marcada
+        # manualmente pela consultora), cai no fallback de avisar um humano
+        # pra ajustar.
         evento_movido = _mover_evento_na_agenda(db, deal_rd_id=deal_rd_id, novo_horario_iso=novo_horario_iso)
 
         if owner and _pode_usar_calendario() and not evento_movido:

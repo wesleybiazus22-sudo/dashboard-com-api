@@ -126,10 +126,52 @@ KNOWLEDGE_BASE: list[dict] = [
             "Develcode. A cobrança só começa depois que o provedor testar, validar que faz sentido "
             "para a operação dele, e der o aceite final da proposta. Se ao final dos 60 dias o "
             "provedor decidir não seguir, é só encerrar sem pagar nada -- o custo só existe a partir "
-            "do aceite. IMPORTANTE: o valor exato da mensalidade NÃO é informado neste material nem "
-            "em nenhum lugar da landing page pública -- é definido em conversa comercial. O agente "
-            "de atendimento NUNCA deve inventar ou estimar um valor de mensalidade; qualquer "
-            "pergunta sobre preço/valor deve ser encaminhada pra um consultor humano."
+            "do aceite. O valor exato da mensalidade e do setup depende do tamanho da base de "
+            "assinantes do provedor -- ver o chunk 'tabela_de_precos' pra consultar a faixa certa. "
+            "Desde 2026-10-15 o agente PODE informar o valor real da tabela quando perguntado (deixou "
+            "de ser sigiloso) -- o que nunca pode é inventar um número fora da tabela, ou informar "
+            "a faixa errada sem antes confirmar quantos assinantes o provedor tem."
+        ),
+    },
+    {
+        "titulo": "tabela_de_precos",
+        "categoria": "objecao",
+        "fonte": "Tabela de precos pratica, informada por Wesley em 2026-10-15",
+        "conteudo": (
+            "Tabela real de mensalidade e setup/implantação da Máquina.ISP, por faixa de assinantes "
+            "do provedor -- são os valores efetivamente praticados hoje, não uma estimativa. Faixas "
+            "até 5.000 assinantes não têm custo de setup; a partir de 5.000 o setup é cobrado à "
+            "parte, uma única vez, no aceite da proposta.\n\n"
+            "0 a 1.250 assinantes: R$ 999/mês, setup R$ 0.\n"
+            "1.251 a 2.500: R$ 1.599/mês, setup R$ 0.\n"
+            "2.501 a 3.750: R$ 2.099/mês, setup R$ 0.\n"
+            "3.751 a 5.000: R$ 2.499/mês, setup R$ 0.\n"
+            "5.000 a 9.999: R$ 3.047/mês, setup R$ 7.500.\n"
+            "10.000 a 14.999: R$ 3.441/mês, setup R$ 9.000.\n"
+            "15.000 a 19.999: R$ 3.835/mês, setup R$ 10.500.\n"
+            "20.000 a 24.999: R$ 4.229/mês, setup R$ 12.000.\n"
+            "25.000 a 29.999: R$ 4.623/mês, setup R$ 13.500.\n"
+            "30.000 a 34.999: R$ 5.017/mês, setup R$ 15.000.\n"
+            "35.000 a 39.999: R$ 5.411/mês, setup R$ 16.500.\n"
+            "40.000 a 44.999: R$ 5.804/mês, setup R$ 18.000.\n"
+            "45.000 a 49.999: R$ 6.198/mês, setup R$ 19.500.\n"
+            "50.000 a 54.999: R$ 6.592/mês, setup R$ 21.000.\n"
+            "55.000 a 59.999: R$ 6.986/mês, setup R$ 22.500.\n"
+            "60.000 a 64.999: R$ 7.380/mês, setup R$ 24.000.\n"
+            "65.000 a 69.999: R$ 7.774/mês, setup R$ 25.500.\n"
+            "70.000 a 74.999: R$ 8.168/mês, setup R$ 27.000.\n"
+            "75.000 a 79.999: R$ 8.562/mês, setup R$ 28.500.\n"
+            "80.000 a 84.999: R$ 8.956/mês, setup R$ 30.000.\n"
+            "85.000 a 89.999: R$ 9.350/mês, setup R$ 31.500.\n"
+            "90.000 a 94.999: R$ 9.744/mês, setup R$ 33.000.\n"
+            "95.000 a 99.999: R$ 10.138/mês, setup R$ 34.500.\n"
+            "100.000 a 109.999: R$ 10.532/mês, setup R$ 36.000.\n"
+            "110.000 a 119.999: R$ 10.925/mês, setup R$ 37.500.\n"
+            "120.000 a 129.999: R$ 10.399/mês, setup R$ 37.815.\n"
+            "130.000 a 140.000: R$ 9.794/mês, setup R$ 38.133.\n\n"
+            "Pra citar o valor certo, primeiro confirme (ou use o que o lead já disse antes na "
+            "conversa) quantos assinantes o provedor tem, e informe a mensalidade E o setup da faixa "
+            "correspondente -- nunca arredonde nem estime de cabeça."
         ),
     },
     {
