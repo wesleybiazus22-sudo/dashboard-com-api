@@ -23,7 +23,7 @@ KNOWLEDGE_BASE: list[dict] = [
             "provedores de internet (ISPs). A proposta central: 'Coloque seu provedor para rodar "
             "sozinho'. Os agentes vendem, cobram, atendem e retêm clientes do provedor, 24 horas por "
             "dia, direto nos sistemas que o provedor já usa (ERP, CRM, WhatsApp) -- não é preciso "
-            "trocar de sistema. Oferta de entrada: 60 dias de teste sem custo de implementação."
+            "trocar de sistema. Oferta de entrada: 45 dias de teste sem custo de implementação."
         ),
     },
     {
@@ -122,9 +122,9 @@ KNOWLEDGE_BASE: list[dict] = [
         "categoria": "objecao",
         "fonte": "FAQ.tsx + Section05b.tsx",
         "conteudo": (
-            "O provedor tem 60 dias de teste completo da Máquina.ISP sem nenhum custo da parte da "
+            "O provedor tem 45 dias de teste completo da Máquina.ISP sem nenhum custo da parte da "
             "Develcode. A cobrança só começa depois que o provedor testar, validar que faz sentido "
-            "para a operação dele, e der o aceite final da proposta. Se ao final dos 60 dias o "
+            "para a operação dele, e der o aceite final da proposta. Se ao final dos 45 dias o "
             "provedor decidir não seguir, é só encerrar sem pagar nada -- o custo só existe a partir "
             "do aceite. O valor exato da mensalidade e do setup depende do tamanho da base de "
             "assinantes do provedor -- ver o chunk 'tabela_de_precos' pra consultar a faixa certa. "
