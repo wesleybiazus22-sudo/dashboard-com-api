@@ -12,6 +12,7 @@ fallback defensivo -- reconfirme com `dump_sample` se algo mudar.
 
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy.orm import Session
 
 from database.models import CrmDeal
@@ -20,6 +21,11 @@ from ingestion.rd_crm.deal_history import snapshot_deal, sync_deal_history
 from ingestion.rd_crm.entities import parse_dt, upsert_by_rd_id
 
 ENDPOINT = "/deals"
+
+# Valor proprio do espelho local (nao existe no RD): negociacao que foi APAGADA la.
+# Ver `marcar_excluidas_no_rd`. Quem le crm_deals pra mostrar pipeline ou agir em
+# negociacao precisa ignorar esse status.
+STATUS_EXCLUIDA = "deleted"
 
 
 def _extract_fbclid(item: dict) -> str | None:
@@ -130,3 +136,69 @@ def sync_deals_incremental(db: Session, updated_since_iso: str) -> int:
     "maior que" é `campo:>valor`.
     """
     return _sync(db, params={"filter": f"updated_at:>{updated_since_iso}"})
+
+
+def _ids_no_rd(client: RDCrmClient, max_passadas: int = 6) -> set[str]:
+    """Ids de TODAS as negociacoes do RD. Uma passada so nao basta: a listagem do RD
+    nao tem ordem estavel entre paginas -- medido em 2026-10-19, com 591 negociacoes
+    no RD cada passada devolvia os 591 itens, mas so 441-591 ids UNICOS (as paginas
+    se sobrepoem e parte nunca aparece; nenhum parametro de sort/tamanho de pagina
+    estabilizou). O que e confiavel e o TOTAL de itens, entao une passadas ate a
+    uniao bater com ele -- completude verificada, nao presumida. Se nao fechar no
+    limite de passadas, devolve o que tiver: o GET individual de cada candidata em
+    `marcar_excluidas_no_rd` continua garantindo que nada vivo seja marcado."""
+    ids: set[str] = set()
+    for _ in range(max_passadas):
+        total = 0
+        for item in client.paginate(ENDPOINT):
+            ids.add(item["id"])
+            total += 1
+        if len(ids) >= total:
+            break
+    return ids
+
+
+def marcar_excluidas_no_rd(db: Session) -> int:
+    """Marca como STATUS_EXCLUIDA as negociacoes que existem aqui mas foram APAGADAS
+    no RD. Nem a carga incremental (so traz o que foi ATUALIZADO) nem a completa (so
+    faz upsert do que existe) ficam sabendo de uma exclusao -- a negociacao apagada
+    congelava no ultimo estado pra sempre. Incidente real em 2026-10-19: 17
+    negociacoes apagadas no RD (testes e duplicatas) seguiam "em andamento" aqui, e
+    a fotografia do funil nunca batia com o quadro do CRM.
+
+    Lista os ids do RD (ver `_ids_no_rd`) e, pra cada candidata (existe aqui, nao
+    veio na lista), CONFIRMA com um GET individual que o RD devolve 404 antes de
+    marcar -- uma lista incompleta nunca pode apagar uma negociacao viva. Trava
+    extra: candidatas demais num lote so indica lista quebrada, nao exclusao em
+    massa; aborta sem marcar nada. Reversivel por natureza: se a negociacao voltar a
+    existir no RD, a proxima sincronizacao sobrescreve o status com o valor real."""
+    client = RDCrmClient(db)
+    ids_no_rd = _ids_no_rd(client)
+    if not ids_no_rd:
+        raise RuntimeError("RD devolveu zero negociacoes -- abortado sem marcar nada.")
+
+    candidatas = (
+        db.query(CrmDeal)
+        .filter(CrmDeal.status.is_distinct_from(STATUS_EXCLUIDA), CrmDeal.rd_id.notin_(ids_no_rd))
+        .all()
+    )
+    limite = max(30, len(ids_no_rd) // 5)
+    if len(candidatas) > limite:
+        raise RuntimeError(
+            f"{len(candidatas)} negociacoes locais nao vieram na lista do RD (limite {limite}) -- "
+            "provavel lista incompleta, abortado sem marcar nada."
+        )
+
+    marcadas = 0
+    for deal in candidatas:
+        try:
+            client.get(f"{ENDPOINT}/{deal.rd_id}")
+            continue  # existe no RD, a lista e que nao trouxe -- nao mexe
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+        deal.status = STATUS_EXCLUIDA
+        marcadas += 1
+
+    db.commit()
+    return marcadas

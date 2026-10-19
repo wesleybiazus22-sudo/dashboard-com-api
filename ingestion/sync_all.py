@@ -177,6 +177,7 @@ def run_full_sync() -> set[str]:
             ok_entities.add("contacts")
         if _run_step(db, "negociacoes", lambda: deals_sync.sync_deals_full(db)):
             ok_entities.add("deals")
+            _run_step(db, "negociacoes excluidas no RD", lambda: deals_sync.marcar_excluidas_no_rd(db))
         if _run_step(db, "tarefas", lambda: tasks_sync.sync_tasks(db)):
             ok_entities.add("tasks")
         if _run_step(db, "reunioes", lambda: meetings_sync.sync_meetings(db)):
@@ -240,6 +241,10 @@ def run_incremental_sync() -> set[str]:
             since_iso = since.isoformat(timespec="seconds")
             if _run_step(db, "negociacoes atualizadas", lambda: deals_sync.sync_deals_incremental(db, updated_since_iso=since_iso)):
                 ok_entities.add("deals")
+        # O delta por updated_at nunca ve uma exclusao -- reconcilia a lista inteira.
+        # Fora do ok_entities de proposito: falhar aqui nao deve travar o cursor.
+        if "deals" in ok_entities:
+            _run_step(db, "negociacoes excluidas no RD", lambda: deals_sync.marcar_excluidas_no_rd(db))
 
         since = _get_last_synced_at(db, "tasks")
         since_iso = since.isoformat(timespec="seconds") if since else None

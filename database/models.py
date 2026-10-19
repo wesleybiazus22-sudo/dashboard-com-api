@@ -321,7 +321,7 @@ class CrmDeal(Base):
 
     pipeline_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     stage_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    status: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # ongoing / won / lost
+    status: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # ongoing / won / lost / paused (RD); deleted (local, apagada no RD)
 
     organization_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     contact_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

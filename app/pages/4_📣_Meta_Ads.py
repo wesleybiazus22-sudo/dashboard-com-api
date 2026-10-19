@@ -151,6 +151,7 @@ crm_leads_utm = query(
     join meta_ads ma on ma.name = cd.raw->'custom_fields'->>'utm_content' and ma.adset_meta_id = ms.meta_id
     join meta_campaigns mc on mc.meta_id = ms.campaign_meta_id
     where cd.raw->'custom_fields'->>'utm_content' is not null
+      and cd.status is distinct from 'deleted'
     """
 )
 if not crm_leads_utm.empty:

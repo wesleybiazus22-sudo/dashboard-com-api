@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from database.models import CrmContact, CrmDeal, CrmDealSource, WhatsappMessage
 from ingestion.llm.agent import conversar
+from ingestion.rd_crm.deals import STATUS_EXCLUIDA
 from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
 
 logger = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ def _deal_por_telefone(db: Session, phone_number: str) -> CrmDeal | None:
         return None
     return (
         db.query(CrmDeal)
-        .filter(CrmDeal.contact_rd_id.in_(contatos_rd_ids))
+        .filter(CrmDeal.contact_rd_id.in_(contatos_rd_ids), CrmDeal.status.is_distinct_from(STATUS_EXCLUIDA))
         .order_by(CrmDeal.deal_created_at.desc())
         .first()
     )

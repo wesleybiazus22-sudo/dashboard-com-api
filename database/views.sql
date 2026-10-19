@@ -51,7 +51,9 @@ select
 from crm_deals d
 join crm_pipelines p on p.rd_id = d.pipeline_rd_id
 left join crm_stages s on s.rd_id = d.stage_rd_id
-where p.product_group is not null;
+where p.product_group is not null
+  -- 'deleted' = apagada no RD (ver ingestion/rd_crm/deals.py::marcar_excluidas_no_rd)
+  and d.status is distinct from 'deleted';
 
 
 -- Funil consolidado: quantidade e valor de pipeline aberto por etapa canonica,
@@ -131,6 +133,7 @@ with base as (
     join crm_deals d on d.id = sh.deal_id
     left join crm_pipelines p on p.rd_id = sh.pipeline_rd_id
     left join crm_stages s on s.rd_id = sh.stage_rd_id
+    where d.status is distinct from 'deleted'
 )
 select
     deal_rd_id as deal_id,
@@ -261,6 +264,7 @@ left join crm_stages s on s.rd_id = d.stage_rd_id
 left join crm_users u on u.rd_id = d.sdr_owner_rd_id
 where p.product_group is not null
   and d.sdr_owner_rd_id is not null
+  and d.status is distinct from 'deleted'
 group by u.name, d.sdr_owner_rd_id, p.product_group
 order by p.product_group, leads_originados desc;
 
@@ -291,6 +295,7 @@ join crm_pipelines p on p.rd_id = d.pipeline_rd_id
 left join crm_users u on u.rd_id = coalesce(d.closer_owner_rd_id, d.current_owner_rd_id)
 where p.product_group is not null
   and coalesce(d.closer_owner_rd_id, d.current_owner_rd_id) is not null
+  and d.status is distinct from 'deleted'
 group by u.name, coalesce(d.closer_owner_rd_id, d.current_owner_rd_id), p.product_group
 order by p.product_group, receita_fechada desc;
 
@@ -499,6 +504,8 @@ left join sdr_ganhou_em sge on sge.deal_rd_id = d.rd_id
 left join closer_ganhou_em cge on cge.deal_rd_id = d.rd_id
 where p.product_group = 'Máquina ISP'
   and d.deal_created_at >= '2026-04-01'
+  -- 'deleted' = apagada no RD (ver ingestion/rd_crm/deals.py::marcar_excluidas_no_rd)
+  and d.status is distinct from 'deleted'
   and (d.sdr_owner_rd_id is null or d.sdr_owner_rd_id not in (select rd_id from perfis_excluidos))
   and (d.closer_owner_rd_id is null or d.closer_owner_rd_id not in (select rd_id from perfis_excluidos))
   and (d.current_owner_rd_id is null or d.current_owner_rd_id not in (select rd_id from perfis_excluidos));
