@@ -1,0 +1,30 @@
+{
+  "sdr_name": "Miriã",
+  "label": "Outubro/Semana 2 - [Enterprise +24Mi]",
+  "week_start": "2026-10-13",
+  "week_end": "2026-10-16",
+  "companies": [
+    {"name": "CERSUL INTERNET LTDA", "cnpj": "46.351.601/0001-40", "status": "Tentando Contato"},
+    {"name": "ATIVA TELECOM LTDA", "cnpj": "26.500.067/0001-89", "status": "Tentando Contato"},
+    {"name": "POWER TECNOLOGIA E TELECOMUNICACOES LTDA", "cnpj": "35.316.374/0001-03", "status": "Tentando Contato"},
+    {"name": "OMEGA PROVEDOR E SERVICOS DE INTERNET LTDA", "cnpj": "21.901.257/0001-94", "status": "Conectado"},
+    {"name": "FREE WAY TECNOLOGIA LTDA", "cnpj": "15.137.229/0001-40", "status": "Tentando Contato"},
+    {"name": "ATIVA TELECOM LTDA", "cnpj": "04.557.049/0001-09", "status": "Tentando Contato"},
+    {"name": "R. & B. SERVICOS DE TELECOMUNICACOES LTDA", "cnpj": "19.151.627/0001-71", "status": "Tentando Contato"},
+    {"name": "SCREEN SAVER INFORMATICA LTDA", "cnpj": "01.800.080/0001-22", "status": "Tentando Contato"},
+    {"name": "LV SERVICOS DE INTERNET LTDA", "cnpj": "27.071.842/0001-90", "status": "Tentando Contato"},
+    {"name": "GLOBALNET LTDA", "cnpj": "16.566.699/0001-91", "status": "Tentando Contato"},
+    {"name": "NELNET CONSULTORIA E ASSESSORIA DE INTERNET LTDA", "cnpj": "08.645.900/0001-06", "status": "Tentando Contato"},
+    {"name": "COMPANHIA SALVADOR CIDADE INTELIGENTE - SMART", "cnpj": "15.003.007/0001-34", "status": "Tentando Contato"},
+    {"name": "K3 BRASIL TELECOMUNICACOES LTDA", "cnpj": "17.419.712/0001-42", "status": "Tentando Contato"},
+    {"name": "HOTLINK INTERNET LTDA", "cnpj": "01.757.239/0001-73", "status": "Conectado"},
+    {"name": "MUNDOGIGA TELECOM LTDA", "cnpj": "07.460.914/0001-84", "status": "Conectado"},
+    {"name": "JOSE DIVINO DE OLIVEIRA & FILHO LTDA", "cnpj": "13.507.307/0001-25", "status": "Tentando Contato"},
+    {"name": "GRAVATANET TELECOM LTDA", "cnpj": "03.472.578/0001-40", "status": "Tentando Contato"},
+    {"name": "ISP SOLUTION TELECOM LTDA", "cnpj": "12.430.836/0001-05", "status": "Tentando Contato"},
+    {"name": "RAIMAX INTERNET LTDA", "cnpj": "08.804.735/0005-03", "status": "Tentando Contato"},
+    {"name": "INTERNET PROVIDER MIL BR NET LTDA", "cnpj": "06.118.716/0004-17", "status": "Conectado"},
+    {"name": "INFRATEL ENGENHARIA LTDA", "cnpj": "11.816.101/0001-51", "status": "Tentando Contato"},
+    {"name": "CONSORCIO NIPBR E LB", "cnpj": "65.445.779/0001-02", "status": "Tentando Contato"}
+  ]
+}
