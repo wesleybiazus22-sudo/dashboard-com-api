@@ -78,7 +78,9 @@ def cor_conversao(pct: float | None) -> str:
 
 # ---------------------------------------------------------------- Funil
 def funil(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
-    """Alcance em escala linear; taxas em coluna alinhada, sem semáforo arbitrário."""
+    """Alcance em escala linear; % SEMPRE sobre o topo (quem entrou no funil), em
+    coluna alinhada -- nunca etapa-a-etapa, que muda de base a cada linha e confundia
+    a leitura (um "81%" no meio do funil nao dizia 81% de que)."""
     d = df.sort_values("passo").copy()
     fig = go.Figure()
     if d.empty:
@@ -90,16 +92,15 @@ def funil(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
         marker=dict(color=BRAND_BLUE_600),
         text=[format_int(v) for v in d["negociacoes"]],
         textposition="outside", cliponaxis=False,
-        customdata=[[r["etapa"], format_pct(r.get("conversao_etapa_pct")),
-                     format_pct(r.get("retencao_topo_pct"))] for _, r in d.iterrows()],
+        customdata=[[format_pct(r.get("retencao_topo_pct")), format_int(total)] for _, r in d.iterrows()],
         hovertemplate="<b>%{y}</b><br>%{x} negociações alcançaram a etapa"
-                      "<br>Da anterior: %{customdata[1]}<br>Do topo: %{customdata[2]}<extra></extra>",
+                      "<br>%{customdata[0]} das %{customdata[1]} que entraram no funil<extra></extra>",
     ))
-    for i, (_, row) in enumerate(d.iterrows()):
+    for _, row in d.iterrows():
         fig.add_annotation(x=1, xref="paper", y=row["etapa"], yref="y",
-            text="Base" if i == 0 else format_pct(row.get("conversao_etapa_pct")),
+            text=format_pct(row.get("retencao_topo_pct")),
             showarrow=False, xanchor="right", font=dict(size=13, color=TEXT_MUTED))
-    fig.add_annotation(x=1, xref="paper", y=1.08, yref="paper", text="Da anterior",
+    fig.add_annotation(x=1, xref="paper", y=1.08, yref="paper", text="% do topo",
                        showarrow=False, xanchor="right", font=dict(size=11, color=TEXT_MUTED))
     base_layout(fig, height=altura)
     fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.55])
@@ -112,24 +113,28 @@ def snapshot_estagios(df: pd.DataFrame, *, altura: int = 460) -> go.Figure:
     """Foto do momento: quantas negociacoes estao PARADAS em cada etapa agora,
     incluindo terminais (No-show, Encerrado/Standby, Desistiu) -- diferente de
     `funil()`, que e cumulativo/historico (quem ja alcancou aquela etapa ou
-    alguma depois). Sem % de conversao entre etapas -- nao faz sentido aqui,
-    porque uma etapa com poucas negociacoes pode simplesmente ser rapida de
-    passar, nao um gargalo."""
+    alguma depois). A % e a FATIA do total da foto em cada etapa, nunca
+    conversao entre etapas -- nao faz sentido aqui, porque uma etapa com poucas
+    negociacoes pode simplesmente ser rapida de passar, nao um gargalo."""
     d = df.sort_values("passo").copy()
     fig = go.Figure()
     if d.empty:
-        fig.add_annotation(text="Sem negociações no recorte", showarrow=False)
+        fig.add_annotation(text="Sem negociações em andamento", showarrow=False)
         return base_layout(fig, height=altura)
     total = max(float(d["negociacoes"].max()), 1)
+    soma = max(int(d["negociacoes"].sum()), 1)
+    d["fatia_pct"] = 100 * d["negociacoes"] / soma
     fig.add_trace(go.Bar(
         y=d["etapa"], x=d["negociacoes"], orientation="h",
         marker=dict(color=CAT_ORANGE),
-        text=[format_int(v) for v in d["negociacoes"]],
+        text=[f"{format_int(v)} · {format_pct(p)}" for v, p in zip(d["negociacoes"], d["fatia_pct"])],
         textposition="outside", cliponaxis=False,
-        hovertemplate="<b>%{y}</b><br>%{x} negociações aqui agora<extra></extra>",
+        customdata=[[format_pct(p), format_int(soma)] for p in d["fatia_pct"]],
+        hovertemplate="<b>%{y}</b><br>%{x} negociações aqui agora"
+                      "<br>%{customdata[0]} das %{customdata[1]} em andamento<extra></extra>",
     ))
     base_layout(fig, height=altura)
-    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.25])
+    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, total * 1.45])
     fig.update_yaxes(showgrid=False, autorange="reversed")
     fig.update_layout(showlegend=False, margin=dict(l=10, r=18, t=20, b=15), bargap=0.42)
     return fig
@@ -145,10 +150,13 @@ def queda_entre_etapas(df: pd.DataFrame, *, altura: int = 340) -> go.Figure:
     # filtradas pegaria a etapa anterior *sobrevivente*, e nao a etapa realmente
     # anterior no funil, inventando movimentos que nunca existiram
     d = df.sort_values("passo").copy()
+    topo = max(int(d["negociacoes"].max()), 1)
     d["movimento"] = d["etapa"].shift(1) + " → " + d["etapa"]
     d = d[(d["perdidas_no_passo"] > 0) & d["movimento"].notna()]
     if d.empty:
         return None
+    # mesma base do funil ao lado (o topo), pra os dois graficos se lerem juntos
+    d["pct_topo"] = 100 * d["perdidas_no_passo"] / topo
 
     fig = go.Figure(
         go.Bar(
@@ -156,13 +164,15 @@ def queda_entre_etapas(df: pd.DataFrame, *, altura: int = 340) -> go.Figure:
             x=d["perdidas_no_passo"],
             orientation="h",
             marker=dict(color="#D68A35"),
-            text=[f"  {format_int(v)}" for v in d["perdidas_no_passo"]],
+            text=[f"  {format_int(v)} · {format_pct(p)}" for v, p in zip(d["perdidas_no_passo"], d["pct_topo"])],
             textposition="outside",
             cliponaxis=False,
-            hovertemplate="<b>%{y}</b><br>%{x} negociações não avançaram<extra></extra>",
+            customdata=[[format_pct(p), format_int(topo)] for p in d["pct_topo"]],
+            hovertemplate="<b>%{y}</b><br>%{x} negociações não avançaram"
+                          "<br>= %{customdata[0]} das %{customdata[1]} que entraram no funil<extra></extra>",
         )
     )
-    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, d["perdidas_no_passo"].max() * 1.35])
+    fig.update_xaxes(showgrid=False, showticklabels=False, range=[0, d["perdidas_no_passo"].max() * 1.6])
     fig.update_yaxes(autorange="reversed")
     base_layout(fig, height=altura)
     fig.update_layout(margin=dict(l=10, r=10, t=20, b=10), showlegend=False)

@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # garante que "app"/"database" sejam importaveis
@@ -51,6 +52,26 @@ for _col in ("deal_created_at", "closed_at", "sdr_ganhou_at", "closer_ganhou_at"
     deals_all[_col] = pd.to_datetime(deals_all[_col], utc=True, errors="coerce")
 deals_all["deal_status_label"] = deals_all["deal_status"].map(DEAL_STATUS_LABELS).fillna(deals_all["deal_status"])
 
+# Relogio do "tempo no funil" so comeca quando a negociacao entra em Em Prospeccao
+# (definicao do dono do produto) -- Primeira Conexao e so o contato do Melhor Venda,
+# ainda nao e prospeccao de verdade. Sem data registrada de entrada (negociacao que
+# nunca chegou la, ou lacuna de sincronizacao antiga: o historico so comeca numa
+# etapa posterior), o relogio fica vazio em vez de usar a data de criacao, que
+# reintroduziria o tempo de Primeira Conexao que a definicao quer excluir.
+_em_prospeccao = query(
+    "select sh.deal_rd_id as deal_id, min(sh.entered_at) as em_prospeccao_at "
+    "from crm_deal_stage_history sh "
+    "join crm_stages s on s.rd_id = sh.stage_rd_id "
+    "join crm_pipelines p on p.rd_id = sh.pipeline_rd_id "
+    "where p.product_group = 'Máquina ISP' and s.name = 'Em Prospecção' "
+    "group by sh.deal_rd_id"
+)
+deals_all = deals_all.merge(_em_prospeccao, on="deal_id", how="left")
+deals_all["em_prospeccao_at"] = pd.to_datetime(deals_all["em_prospeccao_at"], utc=True, errors="coerce")
+_fim_relogio = deals_all["closed_at"].fillna(pd.Timestamp.now(tz="UTC"))
+deals_all["dias_desde_prospeccao"] = (_fim_relogio - deals_all["em_prospeccao_at"]).dt.total_seconds() / 86400
+deals_all.loc[deals_all["dias_desde_prospeccao"] < 0, "dias_desde_prospeccao"] = float("nan")
+
 alcance_all = query("select * from v_maquina_isp_stage_reach")
 
 # ---------------------------------------------------------------- Filtros
@@ -68,6 +89,7 @@ with st.container(border=True):
     )
 
     c_data, c_gran = st.columns([3, 1])
+    inicio = fim = None
     with c_data:
         if fotografia_atual:
             st.markdown("**Período de criação da negociação**")
@@ -99,21 +121,38 @@ with st.container(border=True):
     with f5:
         sel_status = filters.multiselect_dim(deals_periodo, "deal_status_label", "Status", page=PAGE)
 
-deals_filtrado = filters.aplica_multiselects(
-    deals_periodo,
-    {
-        "origem": sel_origem,
-        "regiao": sel_regiao,
-        "uf": sel_uf,
-        "sdr_name": sel_sdr,
-        "deal_status_label": sel_status,
-    },
-)
+selecoes_dim = {
+    "origem": sel_origem,
+    "regiao": sel_regiao,
+    "uf": sel_uf,
+    "sdr_name": sel_sdr,
+    "deal_status_label": sel_status,
+}
+deals_filtrado = filters.aplica_multiselects(deals_periodo, selecoes_dim)
 
 # drill (clique nos graficos) por cima dos filtros explicitos
 interact.chips(PAGE)
 drills = interact.active(PAGE)
 deals = interact.apply(deals_filtrado, PAGE)
+
+# Mesmos filtros de dimensao e drills, mas SEM o recorte por data de criacao --
+# base das metricas contadas pela data em que o EVENTO aconteceu (Reunião
+# realizada), nao pela data em que a negociacao entrou: um lead criado em julho
+# que so teve reuniao em setembro tem que contar em setembro, e o recorte por
+# criacao o deixaria de fora de qualquer periodo que nao inclua julho.
+eventos_base = interact.apply(filters.aplica_multiselects(deals_all, selecoes_dim), PAGE)
+if fim is not None:
+    # Os presets cortam `fim` no ultimo dia com negociacao CRIADA -- pra eventos, um
+    # periodo que vai ate o fim da base vai ate hoje (uma reuniao de hoje nao pode
+    # sumir so porque nenhuma negociacao nova foi criada hoje).
+    _ultima_criacao = deals_all["deal_created_at"].max().date()
+    fim_eventos = date.today() if fim >= _ultima_criacao else fim
+    reunioes_periodo = filters.recorta_periodo(
+        eventos_base[eventos_base["sdr_ganhou"]], "sdr_ganhou_at", inicio, fim_eventos
+    )
+else:
+    fim_eventos = None
+    reunioes_periodo = deals[deals["sdr_ganhou"]]
 
 if deals.empty:
     st.warning("Nenhuma negociação com essa combinação de filtros. Remova algum filtro acima.")
@@ -126,7 +165,7 @@ st.caption(
 
 # ---------------------------------------------------------------- KPIs
 total = len(deals)
-sdr_ganhos = int(deals["sdr_ganhou"].sum())
+reunioes = int(reunioes_periodo["deal_id"].nunique())
 closer_ganhos = int(deals["closer_ganhou"].sum())
 # Quantas ESTAO em Freemium agora, vs quantas ja CHEGARAM la em algum momento --
 # sao numeros diferentes de proposito (ver "closer_ganhou" em
@@ -137,7 +176,12 @@ closer_ganhos = int(deals["closer_ganhou"].sum())
 freemium_ativos = int((deals["stage_name"] == "Freemium").sum())
 perdidas = int((deals["deal_status"] == "lost").sum())
 andamento = int((deals["deal_status"] == "ongoing").sum())
-mediana_dias = deals["dias_no_funil"].median()
+medidas_relogio = deals["dias_desde_prospeccao"].dropna()
+mediana_dias = medidas_relogio.median() if not medidas_relogio.empty else None
+
+# Toda porcentagem diz sobre QUAL base foi calculada -- "do total"/"de conversão"
+# sozinhos nao deixavam claro se a base era o recorte, o funil ou outra coisa.
+base_recorte = "em andamento" if fotografia_atual else "do recorte"
 
 st.subheader("Visão geral (em andamento agora)" if fotografia_atual else "Visão geral do período")
 k1, k2, k3 = st.columns(3)
@@ -147,12 +191,29 @@ k1.metric(
     help="Negociações em andamento hoje, incluídas nos filtros atuais (já ganhas/perdidas ficam de fora)." if fotografia_atual
     else "Negociações criadas no período e incluídas nos filtros atuais.",
 )
-k2.metric("Em andamento", format_int(andamento), f"{format_pct(100 * andamento / total)} do total", delta_color="off")
-k3.metric(
-    "Reunião realizada", format_int(sdr_ganhos),
-    f"{format_pct(100 * sdr_ganhos / total)} de conversão", delta_color="off",
-    help="Entrega da SDR: a negociação alcançou 'Reunião Realizada' ou além, independente do desfecho final.",
+k2.metric(
+    "Em andamento", format_int(andamento),
+    f"{format_pct(100 * andamento / total)} das {format_int(total)} {base_recorte}", delta_color="off",
 )
+if fotografia_atual:
+    k3.metric(
+        "Reunião realizada", format_int(reunioes),
+        f"{format_pct(100 * reunioes / total)} das {format_int(total)} em andamento", delta_color="off",
+        help="Das negociações em andamento agora, quantas já passaram por Reunião Realizada (ou além).",
+    )
+else:
+    k3.metric(
+        "Reunião realizada", format_int(reunioes),
+        f"equivale a {format_pct(100 * reunioes / total)} das {format_int(total)} criadas no período", delta_color="off",
+        help=(
+            "Contada pela DATA EM QUE A NEGOCIAÇÃO CHEGOU em Reunião Realizada, não pela data de criação: "
+            "uma negociação criada em julho que teve a reunião em setembro conta em setembro. "
+            "Por isso pode ser diferente da barra de Reunião Realizada no funil abaixo, que mostra só as "
+            "negociações CRIADAS no período que chegaram até lá. A porcentagem compara reuniões do "
+            "período com negociações criadas no mesmo período -- é uma razão de volume, não a taxa de "
+            "conversão de uma mesma turma de leads."
+        ),
+    )
 k4.metric(
     "Freemium (ativos agora)", format_int(freemium_ativos),
     f"{format_int(closer_ganhos)} chegaram lá ao todo", delta_color="off",
@@ -164,17 +225,27 @@ k4.metric(
         "negociação não esteja mais ativa lá hoje."
     ),
 )
-k5.metric("Perdidas", format_int(perdidas), f"{format_pct(100 * perdidas / total)} do total", delta_color="off")
-k6.metric("Tempo mediano no funil", format_duration((mediana_dias or 0) * 24))
+k5.metric(
+    "Perdidas", format_int(perdidas),
+    f"{format_pct(100 * perdidas / total)} das {format_int(total)} {base_recorte}", delta_color="off",
+)
+k6.metric(
+    "Tempo mediano no funil",
+    format_duration(mediana_dias * 24) if mediana_dias is not None else "—",
+    f"medido em {format_int(len(medidas_relogio))} das {format_int(total)}", delta_color="off",
+    help=(
+        "Começa a contar quando a negociação ENTRA em Em Prospecção (Primeira Conexão não conta -- "
+        "é só o contato inicial do Melhor Venda) e vai até a negociação ser ganha/perdida, ou até hoje "
+        "se ainda está aberta. Só entram na conta as negociações com data de entrada em Em Prospecção "
+        "registrada: as que ainda estão em Primeira Conexão não começaram a contar, e algumas antigas "
+        "não têm essa data no histórico (lacuna de sincronização) -- nenhuma delas é estimada."
+    ),
+)
 
 st.divider()
 
 # ---------------------------------------------------------------- Funil
 st.subheader("Funil de conversão")
-st.caption(
-    "Cada barra é quantas negociações **alcançaram** aquela etapa (por histórico ou por estarem nela/adiante) — "
-    "não quantas estão paradas nela hoje. É o que faz o funil ser sempre decrescente e, portanto, interpretável."
-)
 
 alcance = alcance_all[alcance_all["deal_id"].isin(deals["deal_id"])]
 if alcance.empty:
@@ -191,11 +262,24 @@ else:
     funil_df = funil_df.reset_index(drop=True)
     topo = funil_df["negociacoes"].max()
     funil_df["anterior"] = funil_df["negociacoes"].shift(1)
-    funil_df["conversao_etapa_pct"] = (100 * funil_df["negociacoes"] / funil_df["anterior"].where(funil_df["anterior"] > 0)).round(1)
     funil_df["retencao_topo_pct"] = (100 * funil_df["negociacoes"] / topo).round(1)
     funil_df["perdidas_no_passo"] = (
         funil_df["anterior"].fillna(funil_df["negociacoes"]) - funil_df["negociacoes"]
     ).astype(int)
+    funil_df["queda_pp_topo"] = funil_df["retencao_topo_pct"].shift(1) - funil_df["retencao_topo_pct"]
+
+    sem_etapa = len(deals) - alcance["deal_id"].nunique()
+    st.caption(
+        f"Cada barra é quantas negociações **alcançaram** aquela etapa (por histórico ou por estarem nela/adiante) — "
+        f"não quantas estão paradas nela hoje. **Toda porcentagem é sobre o topo**: as "
+        f"**{format_int(topo)}** negociações que entraram no funil. Ex: 30% em Reunião Agendada = de cada 100 "
+        f"que entraram, 30 chegaram lá."
+        + (
+            f" {format_int(sem_etapa)} negociações do recorte não aparecem aqui por não terem nenhuma etapa do "
+            f"funil registrada (ex: criadas direto em Encerrado/Standby)."
+            if sem_etapa > 0 else ""
+        )
+    )
 
     fc1, fc2 = st.columns([3, 2])
     with fc1:
@@ -206,46 +290,59 @@ else:
         st.plotly_chart(charts.funil(funil_df), use_container_width=True, key=f"{PAGE}_funil", config={"displayModeBar": False})
     with fc2:
         st.markdown("**Ainda não avançaram**")
-        st.caption("Diferença de alcance entre etapas. Inclui negociações em andamento e perdidas; não equivale a perdas no CRM.")
+        st.caption(
+            "Quantas ficaram em cada passagem, em número e em % do topo. Inclui negociações em andamento "
+            "e perdidas; não equivale a perdas no CRM."
+        )
         fig_queda = charts.queda_entre_etapas(funil_df)
         if fig_queda is not None:
             st.plotly_chart(fig_queda, use_container_width=True, key=f"{PAGE}_queda", config={"displayModeBar": False})
         else:
             st.caption("Nenhuma queda entre etapas no recorte atual.")
 
-    # leitura automatica do maior gargalo -- o insight que alguem procuraria na mao
-    gargalo = funil_df[funil_df["conversao_etapa_pct"].notna()].nsmallest(1, "conversao_etapa_pct")
+    # leitura automatica do maior gargalo -- medido em pontos percentuais DO TOPO (onde
+    # o funil perde mais gente em relacao a quem entrou), mesma base de todo o resto
+    # do funil, em vez de conversao etapa-a-etapa
+    gargalo = funil_df[funil_df["queda_pp_topo"] > 0].nlargest(1, "queda_pp_topo")
     if not gargalo.empty:
         g = gargalo.iloc[0]
-        pos = int(g.name)
-        anterior = funil_df.iloc[pos - 1]["etapa"] if pos > 0 else "topo do funil"
+        anterior = funil_df.iloc[int(g.name) - 1]
         st.info(
-            f"🔎 **Maior gargalo:** a passagem de **{anterior}** para **{g['etapa']}** tem conversão de "
-            f"**{format_pct(g['conversao_etapa_pct'])}** — {format_int(g['perdidas_no_passo'])} negociações ainda não alcançaram essa etapa. "
-            f"Compare volume, tempo de maturação e motivos de perda antes de priorizar uma ação."
+            f"🔎 **Maior gargalo:** entre **{anterior['etapa']}** e **{g['etapa']}** o funil cai de "
+            f"**{format_pct(anterior['retencao_topo_pct'])}** para **{format_pct(g['retencao_topo_pct'])}** do topo — "
+            f"{format_int(g['perdidas_no_passo'])} negociações ({format_pct(g['queda_pp_topo'])} de quem entrou no funil) "
+            f"ainda não passaram dessa etapa. Compare volume, tempo de maturação e motivos de perda antes de priorizar uma ação."
         )
 
 st.divider()
 
 # ---------------------------------------------------------------- Snapshot atual
 st.subheader("Fotografia atual do funil")
+# De proposito parte de `deals_all`, NAO de `deals`: a fotografia e o retrato da
+# pipeline inteira AGORA (o mesmo quadro que se ve abrindo o CRM), entao nao pode
+# encolher com periodo de criacao, filtros nem cliques nos graficos -- antes ela
+# saia do recorte filtrado e incluia perdidas (centenas em Encerrado/Standby), e
+# por isso nunca batia com o CRM.
+pipeline_agora = deals_all[deals_all["deal_status"] == "ongoing"].copy()
+pausadas = int((deals_all["deal_status"] == "paused").sum())
 st.caption(
-    "Diferente do funil acima (histórico/acumulado, sempre decrescente), isto mostra "
-    "ONDE cada negociação do recorte está PARADA agora — inclusive quem já saiu do "
-    "fluxo (No-show, Encerrado/Standby, Desistiu). É o mesmo retrato que você vê "
-    "abrindo o quadro do CRM neste instante."
+    f"Onde estão paradas, **neste instante**, as **{format_int(len(pipeline_agora))}** negociações com status "
+    f"**Em andamento** da pipeline inteira do Máquina ISP — o mesmo retrato do quadro do CRM. **Não muda com o "
+    f"período, os filtros nem os cliques** acima. A % é a fatia do total em andamento em cada etapa."
+    + (f" {format_int(pausadas)} negociações pausadas ficam de fora." if pausadas else "")
 )
 # Mesma ordenacao global usada em v_maquina_isp_stage_reach (etapas do pipeline
 # Closer vem sempre depois das da Qualificacao, com o mesmo "+100") -- mas aqui
-# SEM excluir as etapas terminais, porque o objetivo e mostrar onde as
-# negociacoes realmente estao, saidas do fluxo inclusive.
-deals["passo_snapshot"] = deals["stage_order"] + deals["pipeline_name"].map(
+# SEM excluir as etapas terminais: uma negociacao em andamento parada em No-show
+# ou Encerrado/Standby continua aparecendo nessa coluna do CRM, e tem que aparecer
+# aqui tambem.
+pipeline_agora["passo"] = pipeline_agora["stage_order"] + pipeline_agora["pipeline_name"].map(
     lambda p: 100 if p == "[Máquina ISP] Closer" else 0
 )
 snapshot_df = (
-    deals.groupby(["passo_snapshot", "stage_name"])["deal_id"].nunique()
+    pipeline_agora.groupby(["passo", "stage_name"])["deal_id"].nunique()
     .reset_index(name="negociacoes")
-    .rename(columns={"passo_snapshot": "passo", "stage_name": "etapa"})
+    .rename(columns={"stage_name": "etapa"})
 )
 st.plotly_chart(
     charts.snapshot_estagios(snapshot_df), use_container_width=True,
@@ -336,20 +433,23 @@ with st.expander("Composição e evolução", expanded=False):
         "Perdidas por quando foram de fato marcadas como perdidas, Reunião realizada por "
         "quando a negociação de fato chegou lá. Nenhuma das três usa a data de criação como "
         "proxy das outras duas (um lead criado em julho que só teve reunião em setembro "
-        "conta em setembro, não em julho)."
+        "conta em setembro, não em julho). Reunião realizada usa a mesma base do card lá em "
+        "cima -- inclui reuniões do período de negociações criadas antes dele; Criadas e "
+        "Perdidas consideram só as negociações criadas no período."
     )
 
-    def _bucket(col: str) -> pd.Series:
+    def _bucket(df: pd.DataFrame, col: str) -> pd.Series:
         periodo_pandas = {"D": "D", "W-MON": "W-MON", "MS": "M"}[gran_regra]
-        return deals[col].dt.tz_convert(None).dt.to_period(periodo_pandas).dt.start_time
+        return df[col].dt.tz_convert(None).dt.to_period(periodo_pandas).dt.start_time
 
-    criadas = deals.assign(bucket=_bucket("deal_created_at")).groupby("bucket")["deal_id"].nunique().reset_index(name="Criadas")
+    criadas = deals.assign(bucket=_bucket(deals, "deal_created_at")).groupby("bucket")["deal_id"].nunique().reset_index(name="Criadas")
+    _lost = deals[deals["deal_status"] == "lost"]
     perdidas_ts = (
-        deals[deals["deal_status"] == "lost"].assign(bucket=_bucket("closed_at"))
+        _lost.assign(bucket=_bucket(_lost, "closed_at"))
         .groupby("bucket")["deal_id"].nunique().reset_index(name="Perdidas")
     )
     ganhos = (
-        deals[deals["sdr_ganhou"]].assign(bucket=_bucket("sdr_ganhou_at"))
+        reunioes_periodo.assign(bucket=_bucket(reunioes_periodo, "sdr_ganhou_at"))
         .groupby("bucket")["deal_id"].nunique().reset_index(name="Reunião realizada")
     )
     evol = criadas.merge(perdidas_ts, on="bucket", how="outer").merge(ganhos, on="bucket", how="outer")
@@ -539,14 +639,17 @@ with st.expander("Perdas e negociações", expanded=False):
     # ---------------------------------------------------------------- Detalhe
     st.subheader("Negociações no recorte")
 
+    # Mesma definicao do card "Tempo mediano no funil" (relogio a partir de Em
+    # Prospeccao) -- vazio pra quem ainda nao comecou a contar, nao zero.
     cols_detalhe = {
         "deal_name": "Negociação", "stage_name": "Etapa atual", "deal_status_label": "Status",
         "sdr_name": "SDR", "origem": "Origem", "cidade": "Cidade", "uf": "UF",
-        "atividades": "Atividades", "dias_no_funil": "Dias no funil", "motivo_perda": "Motivo de perda",
+        "atividades": "Atividades", "dias_desde_prospeccao": "Dias desde Em Prospecção",
+        "motivo_perda": "Motivo de perda",
     }
     tabela = deals[list(cols_detalhe)].copy()
-    tabela["dias_no_funil"] = tabela["dias_no_funil"].round(0)
-    tabela = tabela.rename(columns=cols_detalhe).sort_values("Dias no funil", ascending=False)
+    tabela["dias_desde_prospeccao"] = tabela["dias_desde_prospeccao"].round(0)
+    tabela = tabela.rename(columns=cols_detalhe).sort_values("Dias desde Em Prospecção", ascending=False, na_position="last")
 
     st.dataframe(tabela, use_container_width=True, hide_index=True, height=420)
 
