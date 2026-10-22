@@ -71,7 +71,12 @@ from config.settings import settings
 from database.models import AgendaEventoMicrosoft, CrmContact, CrmDeal, CrmTask, CrmUser
 from ingestion.llm.pricing import registrar_chamada
 from ingestion.llm.retrieval import buscar_contexto, montar_bloco_contexto
-from ingestion.rd_crm.actions import atualizar_prazo_tarefa, criar_tarefa, mover_negociacao_para_etapa
+from ingestion.rd_crm.actions import (
+    atualizar_prazo_tarefa,
+    criar_negociacao_com_contato,
+    criar_tarefa,
+    mover_negociacao_para_etapa,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +194,7 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
 
 
-def _montar_contexto_dinamico(nome_lead: str | None = None) -> str:
+def _montar_contexto_dinamico(nome_lead: str | None = None, *, sem_cadastro: bool = False) -> str:
     """Parte DINAMICA do system prompt -- data/hora atual (sem isso o modelo
     nao tem como saber que dia e hoje pra calcular "amanha de manha" etc de
     forma confiavel na hora de preencher `horario_iso`) e o nome do lead, se
@@ -203,9 +208,27 @@ def _montar_contexto_dinamico(nome_lead: str | None = None) -> str:
         f'\nVocê está falando com {nome_lead}. Use o nome dele de vez em quando, com naturalidade -- não em toda mensagem, isso soa forçado.'
         if nome_lead else ""
     )
+    # Sinaliza o lead de QR code (chegou sem nenhum card no CRM). Vai na parte
+    # DINAMICA porque muda de lead pra lead -- e deixa de valer assim que
+    # `criar_negociacao_no_crm` roda e o card passa a existir.
+    linha_cadastro = (
+        "\nESTE LEAD AINDA NÃO TEM CADASTRO no nosso sistema -- ele chegou por um QR code, "
+        "não por anúncio. Antes de falar de reunião, colete na conversa, aos poucos e sem "
+        "parecer formulário: nome do provedor, nome dele, quantidade de assinantes e e-mail. "
+        "NUNCA peça o telefone (já temos, é este número). Ao pedir o e-mail, dê um motivo "
+        "que faça sentido pro lead (mandar o material, o resumo do que conversaram), NUNCA "
+        "\"pra finalizar seu cadastro\" -- o lead não tem que saber que existe cadastro. "
+        "E NUNCA prometa que VOCÊ vai mandar material/e-mail: você não envia e-mail nenhum, "
+        "quem envia é a consultora depois. Peça como o canal pra ela te mandar o material e a "
+        "proposta (ex: \"qual seu e-mail? é por onde a consultora te manda o material depois\"). "
+        "Com as quatro respostas em mãos, "
+        "chame `criar_negociacao_no_crm`. Responda as dúvidas dele normalmente enquanto isso -- "
+        "não trave a conversa esperando os dados."
+        if sem_cadastro else ""
+    )
     return (
         f"Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). "
-        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}'
+        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}{linha_cadastro}'
     )
 
 
@@ -224,6 +247,37 @@ _TOOLS = [
                 "pergunta": {"type": "string", "description": "A pergunta/tópico a buscar, em linguagem natural."},
             },
             "required": ["pergunta"],
+        },
+    },
+    {
+        "name": "criar_negociacao_no_crm",
+        "description": (
+            "Chame SÓ quando o contexto disser que este lead AINDA NÃO TEM CADASTRO e "
+            "você já tiver coletado na conversa: nome da empresa, nome da pessoa, "
+            "quantidade de assinantes e e-mail. Cria o cadastro do provedor no nosso "
+            "sistema. O telefone é pego automaticamente do próprio número que está "
+            "conversando -- NUNCA pergunte o telefone. Chame uma única vez por lead: "
+            "depois de criado, o cadastro já existe e as outras ferramentas passam a "
+            "funcionar normalmente."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nome_empresa": {
+                    "type": "string",
+                    "description": "Nome do provedor como o lead falou (razão social ou nome fantasia).",
+                },
+                "nome_contato": {
+                    "type": "string",
+                    "description": "Nome da pessoa que está conversando.",
+                },
+                "quantidade_assinantes": {
+                    "type": "string",
+                    "description": "Quantidade de assinantes como o lead respondeu (ex: '3000', '15 mil').",
+                },
+                "email": {"type": "string", "description": "E-mail informado pelo lead."},
+            },
+            "required": ["nome_empresa", "nome_contato", "quantidade_assinantes", "email"],
         },
     },
     {
@@ -578,10 +632,67 @@ def _executar_ferramenta(
     telefone: str | None,
     deal_rd_id: str | None,
     modo_teste: bool,
+    estado: dict | None = None,
 ) -> str:
+    """`estado` e o canal de volta pro `conversar`: `criar_negociacao_no_crm`
+    grava ali o rd_id da negociacao recem-criada pra que as ferramentas
+    seguintes DO MESMO TURNO ja ajam sobre ela (sem isso, o lead que manda
+    "meus dados sao X, e ja quero agendar" numa mensagem so teria o cadastro
+    criado e o agendamento perdido, porque `deal_rd_id` ainda seria None)."""
     if nome == "consultar_base_conhecimento":
         chunks = buscar_contexto(db, entrada["pergunta"], limite=4)
         return montar_bloco_contexto(chunks)
+
+    if nome == "criar_negociacao_no_crm":
+        nome_empresa = (entrada.get("nome_empresa") or "").strip()
+        nome_contato = (entrada.get("nome_contato") or "").strip()
+        assinantes = (entrada.get("quantidade_assinantes") or "").strip()
+        email = (entrada.get("email") or "").strip()
+
+        if deal_rd_id:
+            return (
+                "Esse lead JÁ TEM cadastro -- não crie outro. NÃO comente isso com o lead "
+                "(nada de \"já te encontrei no sistema\"): é interno. Apenas siga a conversa "
+                "normalmente, usando as outras ferramentas."
+            )
+        faltando = [
+            rotulo for rotulo, valor in (
+                ("nome da empresa", nome_empresa), ("nome da pessoa", nome_contato),
+                ("quantidade de assinantes", assinantes), ("e-mail", email),
+            ) if not valor
+        ]
+        if faltando:
+            return (
+                f"Faltou coletar: {', '.join(faltando)}. Pergunte ao lead de forma natural "
+                "e só então chame esta ferramenta de novo."
+            )
+        if modo_teste or not telefone:
+            return (
+                "[MODO TESTE -- nada foi criado no CRM] Cadastro seria criado pra "
+                f"{nome_empresa} ({nome_contato}, {assinantes} assinantes, {email}). "
+                "Siga a conversa como se tivesse dado certo, SEM comentar com o lead que "
+                "criou cadastro/registro -- isso é interno."
+            )
+
+        negociacao = criar_negociacao_com_contato(
+            db,
+            nome_empresa=nome_empresa,
+            nome_contato=nome_contato,
+            telefone=telefone,
+            owner_rd_id=settings.whatsapp_agent_owner_padrao_rd_id,
+            pipeline_rd_id=settings.rd_pipeline_maquina_isp_qualificacao_rd_id,
+            stage_rd_id=settings.rd_stage_primeira_conexao_rd_id,
+            source_rd_id=settings.rd_source_qrcode_rd_id,
+            email=email,
+            quantidade_assinantes=assinantes,
+        )
+        if estado is not None:
+            estado["deal_rd_id"] = negociacao["id"]
+        return (
+            "Cadastro criado com sucesso. NÃO comente que criou cadastro, registro ou card -- "
+            "isso é interno. Apenas agradeça as informações com naturalidade e siga a conversa "
+            "de onde parou."
+        )
 
     if nome == "sinalizar_interesse":
         resumo = entrada.get("resumo", "")
@@ -932,7 +1043,9 @@ def conversar(
     # proposito -- ver `_SYSTEM_PROMPT_BASE` e `_montar_contexto_dinamico`.
     system_prompt = [
         {"type": "text", "text": _SYSTEM_PROMPT_BASE, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": _montar_contexto_dinamico(nome_lead=_primeiro_nome_lead(nome_lead))},
+        {"type": "text", "text": _montar_contexto_dinamico(
+            nome_lead=_primeiro_nome_lead(nome_lead), sem_cadastro=deal_rd_id is None,
+        )},
     ]
     mensagens = list(historico) + [{"role": "user", "content": mensagem}]
 
@@ -978,9 +1091,16 @@ def conversar(
         resultados = []
         for chamada in chamadas_ferramenta:
             try:
+                # `estado` deixa `criar_negociacao_no_crm` devolver o rd_id da
+                # negociacao que acabou de criar, e a releitura logo abaixo faz
+                # as ferramentas seguintes (deste turno e dos proximos) ja
+                # agirem sobre ela.
+                estado: dict = {}
                 resultado = _executar_ferramenta(
-                    db, chamada.name, chamada.input, telefone=telefone, deal_rd_id=deal_rd_id, modo_teste=modo_teste,
+                    db, chamada.name, chamada.input, telefone=telefone, deal_rd_id=deal_rd_id,
+                    modo_teste=modo_teste, estado=estado,
                 )
+                deal_rd_id = estado.get("deal_rd_id") or deal_rd_id
             except Exception:  # noqa: BLE001 -- uma ferramenta falhando (ex: negociacao apagada
                 # no RD, 404) nunca pode derrubar o turno inteiro e deixar o lead sem resposta.
                 db.rollback()

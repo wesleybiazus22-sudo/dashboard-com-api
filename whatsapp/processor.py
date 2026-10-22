@@ -34,6 +34,7 @@ log, nunca uma excecao que propaga.
 
 import logging
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -206,6 +207,43 @@ def _e_numero_de_teste(phone_number: str) -> bool:
     )
 
 
+def _sem_acento_minusculo(texto: str | None) -> str:
+    """Normaliza pra comparar o marcador do QR code: sem acento, caixa baixa,
+    espacos colapsados -- o lead pode digitar/corrigir o texto preenchido antes
+    de enviar, e acento e caixa nao podem decidir se ele e atendido ou nao."""
+    sem_acento = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode()
+    return " ".join(sem_acento.lower().split())
+
+
+def _veio_do_qrcode(db: Session, phone_number: str) -> bool:
+    """True se a PRIMEIRA mensagem desse numero trouxe o marcador do QR code
+    (ver WHATSAPP_AGENT_QRCODE_MARKER). O QR code aponta pra um link wa.me com
+    o texto ja preenchido, entao esse marcador e o que separa "lead que escaneou
+    nosso QR code" de "numero desconhecido qualquer" -- sem ele, atender quem
+    nao tem card no CRM significaria responder qualquer um que mandasse
+    mensagem, inclusive engano e spam.
+
+    Procura em QUALQUER mensagem recebida desse numero, nao so na primeira: o
+    link preenche so a mensagem de abertura, mas quem ja tinha conversado com o
+    agente antes (ou voltou meses depois) tambem escaneia o QR code -- travar na
+    primeira mensagem deixaria esse lead sem atendimento pra sempre. Olhar o
+    historico inteiro tambem mantem a conversa valendo da segunda mensagem em
+    diante, quando o lead ja escreve o que quiser."""
+    marcador = _sem_acento_minusculo(settings.whatsapp_agent_qrcode_marker)
+    if not marcador:
+        return False
+    recebidas = (
+        db.query(WhatsappMessage.text_body)
+        .filter(
+            WhatsappMessage.phone_number == phone_number,
+            WhatsappMessage.direction == "inbound",
+            WhatsappMessage.text_body.isnot(None),
+        )
+        .all()
+    )
+    return any(marcador in _sem_acento_minusculo(texto) for (texto,) in recebidas)
+
+
 def _lead_de_trafego_pago(db: Session, deal: CrmDeal | None) -> bool:
     """Trava POR ORIGEM (ver WHATSAPP_AGENT_PAID_TRAFFIC_MARKER). O agente so
     responde lead de trafego pago -- checado por DOIS sinais na negociacao:
@@ -260,7 +298,9 @@ def _agente_ja_engajou(db: Session, phone_number: str) -> bool:
     )
 
 
-def _pode_iniciar_atendimento(db: Session, phone_number: str, deal: CrmDeal | None) -> bool:
+def _pode_iniciar_atendimento(
+    db: Session, phone_number: str, deal: CrmDeal | None, *, veio_do_qrcode: bool = False
+) -> bool:
     """So deixa o agente INICIAR o atendimento (primeira resposta) se a
     negociacao estiver na etapa "Primeira Conexao" -- ver
     RD_STAGE_PRIMEIRA_CONEXAO_RD_ID. Se ja passou dessa etapa, um humano
@@ -271,6 +311,13 @@ def _pode_iniciar_atendimento(db: Session, phone_number: str, deal: CrmDeal | No
     if not etapa_inicial:
         return True
     if _agente_ja_engajou(db, phone_number):
+        return True
+    # Lead de QR code ainda SEM card: e exatamente quem o agente precisa
+    # atender pra poder criar o card (ver `criar_negociacao_no_crm` em
+    # ingestion/llm/agent.py). A checagem de etapa nao se aplica -- nao ha
+    # etapa ainda. Mas se ele JA tem card, a regra normal volta a valer: card
+    # adiante de "Primeira Conexao" significa humano no comando.
+    if veio_do_qrcode and deal is None:
         return True
     return bool(deal and deal.stage_rd_id == etapa_inicial)
 
@@ -300,8 +347,9 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
         # vazio so por causa da origem. Mesmo criterio que ja libera a continuacao
         # de conversa em `_pode_iniciar_atendimento` logo abaixo.
         ja_engajado = _agente_ja_engajou(db, phone_number)
+        veio_do_qrcode = _veio_do_qrcode(db, phone_number)
 
-        if not de_teste and not ja_engajado and not _lead_de_trafego_pago(db, deal):
+        if not de_teste and not ja_engajado and not veio_do_qrcode and not _lead_de_trafego_pago(db, deal):
             logger.info(
                 "Agente: numero %s nao tem negociacao de trafego pago (deal=%s) -- mensagem guardada, sem resposta. "
                 "Se o card ainda nao sincronizou, o reprocessamento tenta de novo.",
@@ -309,7 +357,7 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             )
             return
 
-        if not de_teste and not _pode_iniciar_atendimento(db, phone_number, deal):
+        if not de_teste and not _pode_iniciar_atendimento(db, phone_number, deal, veio_do_qrcode=veio_do_qrcode):
             logger.info(
                 "Agente: numero %s -- negociacao %s ja passou de 'Primeira Conexao' (etapa %s) e o agente ainda nao "
                 "havia engajado -- humano assumiu, mensagem guardada sem resposta.",

@@ -184,6 +184,28 @@ class Settings(BaseSettings):
     # numero. Nao mexe no CRM nem no log de custo. Vazio = comando desligado.
     whatsapp_agent_reset_keyword: str = "/reset"
 
+    # --- Lead de QR code (sem card no CRM) -------------------------------
+    # O QR code aponta pra um link wa.me com TEXTO JA PREENCHIDO; esse texto e
+    # a senha que diz "esse lead veio do QR code". Sem um marcador assim, a
+    # unica alternativa pra atender quem nao tem card seria responder qualquer
+    # numero desconhecido que mandar mensagem -- abrindo o agente (e o custo de
+    # API) pra engano, spam e robo. Comparado sem acento e sem caixa, como
+    # SUBSTRING da primeira mensagem (o lead pode editar o texto antes de
+    # enviar, mas raramente apaga tudo). Vazio = recurso desligado, e lead sem
+    # card continua sem resposta.
+    whatsapp_agent_qrcode_marker: str = "quero conhecer a maquina isp"
+
+    # Origem gravada na negociacao criada pelo agente a partir do QR code --
+    # "Feiras e Eventos" (decisao do usuario em 2026-10-22: o QR code vai em
+    # estande, cracha e material de feira).
+    rd_source_qrcode_rd_id: str = "687fe8cbd5677c001aa540b0"
+
+    # Dono das negociacoes criadas pelo agente. Miria Martins concentra hoje
+    # 249 das 262 negociacoes recentes do funil de Qualificacao -- e tambem
+    # quem recebe a transferencia de agendamento (`transferir_para_consultora`),
+    # entao o card ja nasce com quem vai trabalha-lo.
+    whatsapp_agent_owner_padrao_rd_id: str = "6a70ddd4a568ef00205119d5"
+
     # Etapa "Primeira Conexao" do pipeline [Máquina ISP] - Qualificação. O agente
     # so INICIA o atendimento (primeira resposta) com um lead cuja negociacao
     # esta nesta etapa -- se ja passou dela, e porque um humano assumiu, e o
