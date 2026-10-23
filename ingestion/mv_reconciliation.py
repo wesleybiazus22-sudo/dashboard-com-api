@@ -102,6 +102,34 @@ def create_campaign(
         return campaign.id
 
 
+def cnpj_valido(cnpj: str | None) -> bool:
+    """Confere os dois digitos verificadores do CNPJ. CNPJ invalido e sempre erro
+    de transcricao, nunca um documento exotico -- os digitos sao calculados a
+    partir dos outros 12, entao nao ha como um CNPJ real falhar aqui.
+
+    Vale a pena checar porque os dados do MV chegam por PRINT (ver docstring do
+    modulo) e a fonte da tela confunde 6 com 8, 0 com 9 e 4 com 5. Em 23/10/2026
+    uma varredura achou 72 CNPJ invalidos nas 1102 empresas ja carregadas (6,5%),
+    chegando a 23% numa campanha -- e 63 deles nunca casaram com negociacao
+    nenhuma, porque `auto_match_campaign` so confirma por CNPJ: um numero que nao
+    existe nunca encontra par.
+
+    Devolve False tambem pra vazio/ausente, pra quem chama tratar "sem CNPJ" e
+    "CNPJ errado" com o mesmo cuidado na hora de avisar."""
+    digitos = re.sub(r"\D", "", cnpj or "")
+    if len(digitos) != 14 or len(set(digitos)) == 1:
+        return False
+
+    def digito(base: str, pesos: list[int]) -> str:
+        resto = sum(int(c) * p for c, p in zip(base, pesos)) % 11
+        return "0" if resto < 2 else str(11 - resto)
+
+    return (
+        digitos[12] == digito(digitos[:12], [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+        and digitos[13] == digito(digitos[:13], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    )
+
+
 def add_companies(campaign_id: str, companies: list[tuple[str, str | None, str | None]]) -> int:
     """companies: lista de (nome_no_mv, cnpj_no_mv, status_no_mv)."""
     count = 0

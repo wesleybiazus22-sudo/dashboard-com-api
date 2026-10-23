@@ -27,7 +27,7 @@ from datetime import date
 
 from database.connection import session_scope
 from database.models import CrmDeal, CrmStage, MvCampaignCompany
-from ingestion.mv_reconciliation import add_companies, auto_match_campaign, create_campaign
+from ingestion.mv_reconciliation import add_companies, auto_match_campaign, cnpj_valido, create_campaign
 
 
 def _print_report(campaign_id: str) -> None:
@@ -65,12 +65,36 @@ def _print_report(campaign_id: str) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python -m scripts.load_mv_campaign <caminho_para_o_json>")
+        print("Uso: python -m scripts.load_mv_campaign <caminho_para_o_json> [--forcar]")
         sys.exit(1)
 
+    forcar = "--forcar" in sys.argv
     path = sys.argv[1]
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+
+    # Checagem ANTES de gravar qualquer coisa: CNPJ invalido e sempre erro de
+    # transcricao do print, e `auto_match_campaign` so confirma por CNPJ -- um
+    # numero errado entra na base e nunca casa com negociacao nenhuma, sem
+    # nenhum sinal de que o problema foi esse. Barrar aqui e o unico momento
+    # barato de corrigir: depois de carregado, nao da pra saber qual era o
+    # digito certo (ver `cnpj_valido` em ingestion/mv_reconciliation.py).
+    suspeitas = [
+        (c["name"], c.get("cnpj")) for c in data["companies"] if not cnpj_valido(c.get("cnpj"))
+    ]
+    if suspeitas:
+        total = len(data["companies"])
+        print(f"\n!! {len(suspeitas)} de {total} CNPJ nao passam no digito verificador:\n")
+        for nome, cnpj in suspeitas:
+            print(f"   {nome[:52]:54s} {cnpj or '(sem CNPJ)'}")
+        print(
+            "\nIsso costuma ser 6 lido como 8, 0 como 9 ou 4 como 5 no print. "
+            "Confira no Melhor Venda e corrija o JSON."
+        )
+        if not forcar:
+            print("\nNada foi carregado. Pra carregar assim mesmo: --forcar\n")
+            sys.exit(1)
+        print("\n--forcar: carregando mesmo assim.\n")
 
     campaign_id = create_campaign(
         week_start=date.fromisoformat(data["week_start"]),
