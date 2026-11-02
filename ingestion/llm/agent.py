@@ -443,6 +443,23 @@ _TOOLS = [
 ]
 
 
+# Teto de tokens de SAIDA por chamada ao modelo. O claude-sonnet-5 roda com pensamento
+# adaptativo LIGADO por padrao, e o pensamento conta nesse teto. Com 1024, um turno que o
+# faz pensar mais (mensagem ambigua como "?", contexto confuso) gastava tudo pensando e
+# devolvia SO o bloco de pensamento, sem texto: o agente "respondia" em branco e o lead
+# ficava no silencio (02/11/2026: "Pode mostrar" e "?" sem resposta, `output_tokens` = 1024
+# exatos e `stop_reason` = max_tokens). A resposta ao lead continua curta (poucas frases,
+# pelo prompt); o folego extra e pro pensamento.
+_MAX_TOKENS_RESPOSTA = 4096
+_MAX_TOKENS_RESPOSTA_RETRY = 8192
+
+
+def _tem_saida_util(resposta) -> bool:
+    """True se a resposta tem texto nao vazio ou chamada de ferramenta -- algo pra mandar
+    ao lead ou executar. So bloco de pensamento nao conta."""
+    return any((b.type == "text" and (b.text or "").strip()) or b.type == "tool_use" for b in resposta.content)
+
+
 def _cliente() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
@@ -1107,10 +1124,12 @@ def conversar(
     # silenciosamente a parte mais importante (a explicacao) e deixaria so o
     # complemento, que sozinho parece estar ignorando a pergunta.
     partes_texto: list[str] = []
-    for _ in range(6):  # limite de seguranca contra loop infinito de chamada de ferramenta
-        resposta = cliente.messages.create(
+    def _chamar_modelo(limite_tokens: int):
+        """Uma chamada ao modelo, ja registrada no log de custo -- toda chamada paga tokens,
+        inclusive a que sai sem texto e precisa ser refeita."""
+        r = cliente.messages.create(
             model=settings.anthropic_model,
-            max_tokens=1024,
+            max_tokens=limite_tokens,
             system=system_prompt,
             tools=_TOOLS,
             messages=mensagens,
@@ -1118,14 +1137,31 @@ def conversar(
         registrar_chamada(
             db,
             model=settings.anthropic_model,
-            input_tokens=resposta.usage.input_tokens,
-            output_tokens=resposta.usage.output_tokens,
-            cache_write_tokens=getattr(resposta.usage, "cache_creation_input_tokens", 0) or 0,
-            cache_read_tokens=getattr(resposta.usage, "cache_read_input_tokens", 0) or 0,
+            input_tokens=r.usage.input_tokens,
+            output_tokens=r.usage.output_tokens,
+            cache_write_tokens=getattr(r.usage, "cache_creation_input_tokens", 0) or 0,
+            cache_read_tokens=getattr(r.usage, "cache_read_input_tokens", 0) or 0,
             finalidade="conversa_teste" if modo_teste else "conversa_agente",
             phone_number=telefone,
             deal_rd_id=deal_rd_id,
         )
+        return r
+
+    for _ in range(6):  # limite de seguranca contra loop infinito de chamada de ferramenta
+        resposta = _chamar_modelo(_MAX_TOKENS_RESPOSTA)
+        if resposta.stop_reason == "max_tokens" and not _tem_saida_util(resposta):
+            # Rede de seguranca: o modelo esgotou o teto SO pensando. Silencio e a pior saida
+            # possivel pro lead, entao refaz uma vez com bem mais folego.
+            logger.warning(
+                "Agente: so pensamento ate o teto de %s tokens (telefone %s) -- refazendo com %s.",
+                _MAX_TOKENS_RESPOSTA, telefone, _MAX_TOKENS_RESPOSTA_RETRY,
+            )
+            resposta = _chamar_modelo(_MAX_TOKENS_RESPOSTA_RETRY)
+            if not _tem_saida_util(resposta):
+                logger.error(
+                    "Agente: resposta SEM texto mesmo com %s tokens (stop_reason=%s, telefone %s).",
+                    _MAX_TOKENS_RESPOSTA_RETRY, resposta.stop_reason, telefone,
+                )
 
         partes_texto.extend(b.text for b in resposta.content if b.type == "text")
 
