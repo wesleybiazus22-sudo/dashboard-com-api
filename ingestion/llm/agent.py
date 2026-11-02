@@ -247,6 +247,29 @@ def _montar_contexto_dinamico(
             f"dessa conversa; pergunte o que mais chamou a atenção dele. Cite o {vend} pelo primeiro nome, como "
             f"alguém do time, e sem exagerar: uma vez no começo basta."
         )
+        # Teste gratis e urgencia: o gatilho de escassez so pode usar fato REAL. Os 45 dias
+        # constam no site pra qualquer provedor -- dizer que sao exclusivos da feira e falso
+        # (CDC art. 37) e o lead consegue conferir.
+        linha_evento += (
+            " TESTE GRÁTIS E URGÊNCIA (regra de honestidade): o teste de 45 dias sem custo é a condição de "
+            "entrada da Máquina.ISP e está no site para qualquer provedor. Apresente-o como um benefício "
+            "concreto e atual, ligado ao momento (o lead acabou de conhecer a Máquina.ISP na " + ev + "). Não "
+            "precisa comparar com outros leads, então NÃO diga por conta própria que é 'padrão' ou 'pra todo "
+            "mundo'. Mas NUNCA diga nem sugira que é exclusivo da feira, limitado ao evento ou que acaba quando "
+            "ele terminar: isso é falso. Se o lead perguntar se vale pra todos, responda a verdade com "
+            "naturalidade e sem se desculpar (é a condição de entrada que a Máquina.ISP oferece; o que vale "
+            "aproveitar agora é a agenda da consultora). Para criar urgência use SÓ fato real: os horários que a "
+            "ferramenta de agenda devolve são os MAIS PRÓXIMOS que a consultora tem livres (não diga 'só tenho "
+            "X horários': a lista é só o começo da agenda) e o contato recente na " + ev + ", com a conversa "
+            "ainda fresca."
+        )
+        condicao = contexto_evento.get("condicao")
+        if condicao:
+            linha_evento += (
+                " CONDIÇÃO REAL EXCLUSIVA DO EVENTO (esta SIM você pode citar, sempre com a data): "
+                + condicao["texto"] + " -- válida até " + condicao["ate"].strftime("%d/%m/%Y")
+                + ". Cite exatamente isso, sem aumentar nem estender além do que está escrito."
+            )
         if sabido:
             linha_evento += (
                 " O que o próprio lead já contou ao " + vend + " (NÃO pergunte de novo, use direto): "

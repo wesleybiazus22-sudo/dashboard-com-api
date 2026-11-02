@@ -421,6 +421,22 @@ def atualizar_etapa2(db: Session, lead: EventoLead, dados: dict) -> EventoLead:
 # ----------------------------------------------------------------------------
 
 
+def condicao_vigente(hoje: date | None = None) -> dict | None:
+    """Condicao REAL exclusiva do evento configurada em EVENTO_CONDICAO_TEXTO/_ATE, ou
+    None. So vale ate a data (inclusive): passada ela, o agente para de citar sozinho,
+    sem ninguem precisar lembrar de desligar. Vazio ou data torta = nao ha condicao."""
+    texto = (settings.evento_condicao_texto or "").strip()
+    if not texto:
+        return None
+    try:
+        ate = date.fromisoformat(settings.evento_condicao_ate.strip())
+    except ValueError:
+        return None
+    if (hoje or _hoje()) > ate:
+        return None
+    return {"texto": texto, "ate": ate}
+
+
 def contexto_do_evento(db: Session, telefone: str) -> dict | None:
     """Evento + vendedor do lead mais recente com esse telefone, ou None. O agente
     usa pra dizer a quem responde QUEM pediu o contato (ver
@@ -452,4 +468,5 @@ def contexto_do_evento(db: Session, telefone: str) -> dict | None:
         "evento": lead.evento, "vendedor": lead.vendedor, "provedor": lead.provedor,
         "assinantes": lead.assinantes, "erp": lead.erp,
         "local": " / ".join(x for x in (lead.cidade, lead.uf) if x) or None,
+        "condicao": condicao_vigente(),
     }

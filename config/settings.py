@@ -226,6 +226,15 @@ class Settings(BaseSettings):
     # deixaria qualquer um escrever o que quisesse numa mensagem da empresa.
     evento_vendedores: str = "Wesley,Miriã,Daniel,Eliverto,César"
 
+    # Condicao REAL e exclusiva do evento que o agente pode citar como incentivo (opcional).
+    # So preencha com algo que de fato muda depois da feira -- um beneficio extra (ex: setup
+    # com desconto, implantacao assistida) ou um prazo verdadeiro. O agente cita o texto junto
+    # com a data enquanto ela nao passar e para sozinho depois. NAO use isto pra dizer que o
+    # teste de 45 dias e exclusivo da feira: ele consta no site pra qualquer provedor, e
+    # afirmar o contrario seria publicidade enganosa (CDC art. 37).
+    evento_condicao_texto: str = ""
+    evento_condicao_ate: str = ""  # AAAA-MM-DD, inclusive
+
     # Teto de leads aceitos por hora -- segundo disjuntor, contra loop ou abuso.
     evento_max_leads_por_hora: int = 80
 
