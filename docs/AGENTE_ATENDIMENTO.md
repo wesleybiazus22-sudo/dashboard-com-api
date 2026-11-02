@@ -73,7 +73,7 @@ sem erro, sem run vermelho.
 
 ## 3. Como uma conversa começa
 
-Quatro portas de entrada. Todas desembocam no mesmo motor de conversa.
+Cinco portas de entrada. Todas desembocam no mesmo motor de conversa.
 
 ### 3.1 Lead de tráfego pago (automático, proativo)
 
@@ -137,6 +137,63 @@ que está conversando — ele nunca pergunta.
 
 O card nasce em **Primeira Conexão**, origem **Feiras e Eventos**, com a
 **Miriã** como dona.
+
+### 3.5 Captação em evento (desde 02/11/2026)
+
+O vendedor cadastra o lead no estande, no formulário da apresentação ("Nova
+apresentação máquina isp"), e o agente chama o lead no WhatsApp **dizendo quem
+pediu** ("o Wesley me pediu pra te chamar depois da conversa de vocês na Abrint
+Nordeste").
+
+O cadastro é em duas etapas:
+
+- **Etapa 1** (aciona o agente): responsável, nome, celular, e-mail opcional e a
+  autorização de contato por WhatsApp. O Meta exige consentimento para mensagem
+  iniciada pela empresa, então sem o aceite nada é enviado. Antes de enviar, uma
+  tela mostra o número em letras grandes para o lead conferir.
+- **Etapa 2** (opcional, pode ser feita depois pela lista): provedor, cidade, UF,
+  assinantes, ERP e observações. Vai ao CRM por `PATCH` e o agente passa a usar
+  provedor, porte e ERP para não perguntar de novo. **As observações do vendedor
+  nunca chegam ao agente** — são anotações internas e ele poderia repeti-las ao lead.
+
+**Caminho do dado** (`api/routes/eventos.py` → `whatsapp/evento.py`):
+
+1. A página salva o lead no `localStorage` **primeiro** e só depois o envia
+   (fila com novas tentativas; sem internet o lead espera e sai sozinho).
+2. `POST /eventos/leads` grava em `evento_leads`, garante o card (organização +
+   contato + negociação, origem *Feiras e Eventos*, dona Miriã) com uma tarefa que
+   cita quem captou, e manda o template com `{{1}}` = nome do lead e `{{2}}` = nome
+   do responsável.
+3. O telefone passa a ter mensagem outbound e card, então quando o lead responde o
+   fluxo normal assume (mesmo mecanismo do convite manual).
+   `contexto_do_evento` entrega ao agente o evento e o responsável.
+
+**Por que é seguro reenviar.** Cada lead tem um `client_id` gerado na página e o
+servidor é idempotente por ele. Cada etapa é retomável (o estado fica em
+`evento_leads`) e há uma reivindicação atômica por lead: sem ela, uma página que
+estoura o tempo (o servidor gratuito leva ~50s para acordar) e reenvia enquanto a
+primeira chamada ainda roda criaria dois cards e mandaria duas mensagens.
+
+**Envio sem retry automático.** Diferente dos outros envios, o template do evento
+usa `send_template(sem_retry=True)`. Um timeout pode significar "entregou, mas a
+resposta se perdeu", e reenviar mandaria duas aberturas para alguém que acabou de
+conhecer o vendedor. Quando o Meta **recusa** (4xx) o status é `falhou` e pode
+tentar de novo; em qualquer outro erro o status é `incerto` e o reenvio só acontece
+por decisão explícita do vendedor.
+
+**Sem PIN, com disjuntores.** A página não tem senha (decisão do dono do produto:
+só se seleciona o responsável), e como ela pode rodar na web, qualquer segredo no
+HTML seria público. A proteção é outra: janela de datas do evento (fora dela o
+endpoint recusa), lista fechada de responsáveis (o nome vira variável do template,
+então texto livre deixaria qualquer um escrever numa mensagem da empresa),
+consentimento obrigatório, teto de leads por hora, um template por telefone por
+evento e idempotência. O CORS é aberto só nesse sub-app (`/eventos`), sem tocar nos
+webhooks nem no sync.
+
+Status do lead (`evento_leads.status`): `recebido` · `enviado` · `sem_template`
+(card criado, mensagem ainda não liberada) · `falhou` · `incerto` · `duplicado`.
+Para despachar os pendentes depois da aprovação do template:
+`python -m scripts.reenviar_leads_evento` (lista) e `--enviar` (manda).
 
 ---
 
@@ -306,6 +363,7 @@ nova e os lembretes recomeçam para o novo horário.
 | `whatsapp_conversation_cost` | Custo de mensageria do Meta |
 | `agenda_eventos_microsoft` | Eventos criados na agenda |
 | `agente_lembretes_reuniao` | Controle de idempotência dos lembretes |
+| `evento_leads` | Leads captados em evento: responsável, status do envio e dados da etapa 2 |
 | `crm_*` | Espelho do RD CRM |
 
 O agente **não tem memória própria**: o contexto da conversa é reconstruído a
@@ -350,6 +408,10 @@ Tudo em `config/settings.py`, sobrescrito por variáveis de ambiente.
 | `WHATSAPP_AGENT_TEST_PHONE_NUMBERS` | Números que passam por todas as travas |
 | `WHATSAPP_AGENT_QRCODE_MARKER` | Texto do link do QR code |
 | `WHATSAPP_AGENT_PAID_TRAFFIC_MARKER` | Marca que identifica tráfego pago |
+| `WHATSAPP_AGENT_EVENTO_TEMPLATE_NAME` | Template da abertura do evento. **Vazio = o lead é salvo mas nada é enviado** |
+| `EVENTO_NOME` / `EVENTO_VENDEDORES` | Nome do evento e lista de responsáveis (primeiro nome, separados por vírgula) |
+| `EVENTO_JANELA_INICIO` / `_FIM` | Período em que o endpoint aceita leads (padrão 02/11 a 08/11/2026) |
+| `EVENTO_MAX_LEADS_POR_HORA` | Teto de leads por hora (padrão 80) |
 | `WHATSAPP_AGENT_RESET_KEYWORD` | Palavra que zera a conversa (`/reset`) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Agenda |
 

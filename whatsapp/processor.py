@@ -44,6 +44,7 @@ from database.models import CrmContact, CrmDeal, CrmDealSource, WhatsappMessage
 from ingestion.llm.agent import conversar
 from ingestion.rd_crm.deals import STATUS_EXCLUIDA
 from ingestion.whatsapp.client import WhatsappClient, normalizar_telefone_br
+from whatsapp.evento import contexto_do_evento
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +402,7 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
 
         resposta, _ = conversar(
             db, historico, texto, telefone=phone_number, deal_rd_id=deal_rd_id, modo_teste=False, nome_lead=nome_lead,
+            contexto_evento=contexto_do_evento(db, phone_number),
         )
         if not resposta:
             logger.warning("Agente: resposta vazia pro numero %s -- nada enviado.", phone_number)

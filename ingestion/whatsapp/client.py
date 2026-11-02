@@ -74,6 +74,13 @@ class WhatsappClient:
         reraise=True,
     )
     def _post(self, body: dict) -> dict:
+        return self._post_uma_vez(body)
+
+    def _post_uma_vez(self, body: dict) -> dict:
+        """Uma unica tentativa, SEM retry. Envio de mensagem nao e idempotente: num
+        timeout o Meta pode ter ENTREGADO e so a resposta se perdeu, e o retry
+        automatico de `_post` mandaria a mesma mensagem duas vezes. Quem usa
+        isto trata a falha sozinho (ver `send_template(sem_retry=True)`)."""
         url = f"{_BASE_URL}/{_API_VERSION}/{self.phone_number_id}/messages"
         response = httpx.post(
             url, headers={"Authorization": f"Bearer {self.access_token}"}, json=body, timeout=30,
@@ -103,14 +110,21 @@ class WhatsappClient:
             "text": {"body": body, "preview_url": preview_url},
         })
 
-    def send_template(self, to: str, template_name: str, language_code: str = "pt_BR", components: list | None = None) -> dict:
+    def send_template(
+        self, to: str, template_name: str, language_code: str = "pt_BR", components: list | None = None,
+        *, sem_retry: bool = False,
+    ) -> dict:
         """Manda uma mensagem de modelo (template) pre-aprovada pelo Meta -- e o
         UNICO tipo de mensagem que pode iniciar conversa fora da janela de 24h
-        (ex: primeiro contato depois de muito tempo, ou reabrir conversa)."""
+        (ex: primeiro contato depois de muito tempo, ou reabrir conversa).
+
+        `sem_retry=True` desliga as novas tentativas automaticas -- use quando um
+        envio duplicado e pior que um envio que falha (ver `_post_uma_vez`)."""
         template: dict = {"name": template_name, "language": {"code": language_code}}
         if components:
             template["components"] = components
-        return self._post({
+        enviar = self._post_uma_vez if sem_retry else self._post
+        return enviar({
             "messaging_product": "whatsapp",
             "to": to,
             "type": "template",

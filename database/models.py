@@ -115,6 +115,56 @@ class WhatsappMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class EventoLead(Base):
+    """Lead captado presencialmente num evento (ex: Abrint Nordeste) pelo formulario
+    da apresentacao -- ver whatsapp/evento.py.
+
+    `client_id` e um UUID gerado NA PAGINA quando o vendedor salva a etapa 1. E a
+    chave de idempotencia: a pagina trabalha com fila e reenvia sozinha quando
+    falta sinal, entao o mesmo lead pode chegar mais de uma vez -- sem essa chave
+    viraria card duplicado e mensagem duplicada pra uma pessoa real.
+
+    A tabela guarda quem captou e em qual evento: o agente le `vendedor` e `evento`
+    daqui (pelo telefone) pra dizer ao lead quem pediu o contato, e o dashboard
+    pode analisar a captacao por vendedor. O card do RD nao tem campo pra isso."""
+
+    __tablename__ = "evento_leads"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    client_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    evento: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    vendedor: Mapped[str] = mapped_column(String, nullable=False)
+
+    # etapa 1 -- o que dispara o agente
+    nome: Mapped[str] = mapped_column(String, nullable=False)
+    telefone: Mapped[str] = mapped_column(String, nullable=False, index=True)  # normalizado (13 digitos)
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    consentimento_whatsapp: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    capturado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # etapa 2 -- preenchida depois, a vontade do vendedor
+    provedor: Mapped[str | None] = mapped_column(String, nullable=True)
+    cidade: Mapped[str | None] = mapped_column(String, nullable=True)
+    uf: Mapped[str | None] = mapped_column(String, nullable=True)
+    assinantes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    erp: Mapped[str | None] = mapped_column(String, nullable=True)
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # processamento
+    deal_rd_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="recebido", index=True)
+    # recebido | sem_template | enviado | falhou | duplicado
+    erro: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_wamid: Mapped[str | None] = mapped_column(String, nullable=True)
+    enviado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Reivindicacao atomica: enquanto uma chamada processa o lead, as outras (a pagina
+    # reenvia apos timeout) esperam em vez de criar um 2o card e mandar uma 2a mensagem.
+    processando_ate: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class LlmCallLog(Base):
     """Uma linha por chamada ao modelo de IA (Claude) feita pelo agente de
     atendimento -- registra tokens e custo calculado, pra acompanhar gasto de

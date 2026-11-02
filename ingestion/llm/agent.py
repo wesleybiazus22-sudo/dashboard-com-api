@@ -194,7 +194,9 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
 
 
-def _montar_contexto_dinamico(nome_lead: str | None = None, *, sem_cadastro: bool = False) -> str:
+def _montar_contexto_dinamico(
+    nome_lead: str | None = None, *, sem_cadastro: bool = False, contexto_evento: dict | None = None,
+) -> str:
     """Parte DINAMICA do system prompt -- data/hora atual (sem isso o modelo
     nao tem como saber que dia e hoje pra calcular "amanha de manha" etc de
     forma confiavel na hora de preencher `horario_iso`) e o nome do lead, se
@@ -226,9 +228,33 @@ def _montar_contexto_dinamico(nome_lead: str | None = None, *, sem_cadastro: boo
         "não trave a conversa esperando os dados."
         if sem_cadastro else ""
     )
+    linha_evento = ""
+    if contexto_evento:
+        ev, vend = contexto_evento["evento"], contexto_evento["vendedor"]
+        sabido = [
+            f"{rotulo}: {valor}" for rotulo, valor in (
+                ("provedor", contexto_evento.get("provedor")),
+                ("assinantes", contexto_evento.get("assinantes")),
+                ("ERP", contexto_evento.get("erp")),
+                ("local", contexto_evento.get("local")),
+            ) if valor
+        ]
+        linha_evento = (
+            f"\nESTE LEAD FOI CADASTRADO PESSOALMENTE NO EVENTO {ev.upper()} pelo {vend}, que pediu pra você "
+            f"chamá-lo. A mensagem de abertura (modelo automático) já se apresentou e disse isso. Quando ele "
+            f"responder, retome com naturalidade: foi o {vend} quem pediu o contato, depois da conversa no {ev}. "
+            f"Você NÃO sabe o que os dois conversaram no estande -- NUNCA invente assunto, promessa ou detalhe "
+            f"dessa conversa; pergunte o que mais chamou a atenção dele. Cite o {vend} pelo primeiro nome, como "
+            f"alguém do time, e sem exagerar: uma vez no começo basta."
+        )
+        if sabido:
+            linha_evento += (
+                " O que o próprio lead já contou ao " + vend + " (NÃO pergunte de novo, use direto): "
+                + "; ".join(sabido) + "."
+            )
     return (
         f"Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). "
-        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}{linha_cadastro}'
+        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}{linha_cadastro}{linha_evento}'
     )
 
 
@@ -1023,6 +1049,7 @@ def conversar(
     deal_rd_id: str | None = None,
     modo_teste: bool = False,
     nome_lead: str | None = None,
+    contexto_evento: dict | None = None,
 ) -> tuple[str, list[dict]]:
     """Roda um turno de conversa: adiciona `mensagem` ao `historico`, chama o
     Claude (repetindo o loop enquanto ele pedir ferramenta), devolve
@@ -1044,7 +1071,7 @@ def conversar(
     system_prompt = [
         {"type": "text", "text": _SYSTEM_PROMPT_BASE, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _montar_contexto_dinamico(
-            nome_lead=_primeiro_nome_lead(nome_lead), sem_cadastro=deal_rd_id is None,
+            nome_lead=_primeiro_nome_lead(nome_lead), sem_cadastro=deal_rd_id is None, contexto_evento=contexto_evento,
         )},
     ]
     mensagens = list(historico) + [{"role": "user", "content": mensagem}]

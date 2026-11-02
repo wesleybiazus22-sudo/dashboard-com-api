@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from api.routes import auth, health, sync, webhooks, whatsapp
+from api.routes.eventos import eventos_app
 
 app = FastAPI(
     title="Marketing & Sales Data Hub - API",
@@ -13,6 +14,8 @@ app.include_router(auth.router)
 app.include_router(webhooks.router)
 app.include_router(whatsapp.router)
 app.include_router(sync.router)
+# Sub-app (e nao router) pra que o CORS aberto da captacao presencial valha so em /eventos.
+app.mount("/eventos", eventos_app)
 
 
 @app.get("/")

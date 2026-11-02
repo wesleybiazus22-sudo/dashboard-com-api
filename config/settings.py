@@ -206,6 +206,42 @@ class Settings(BaseSettings):
     # entao o card ja nasce com quem vai trabalha-lo.
     whatsapp_agent_owner_padrao_rd_id: str = "6a70ddd4a568ef00205119d5"
 
+    # --- Evento presencial (captacao no estande -> agente chama o lead) ----------
+    # O vendedor cadastra o lead na apresentacao (index.html da "Nova apresentacao
+    # maquina isp"); a pagina chama POST /eventos/leads, que cria o card e manda o
+    # template de abertura. Ver whatsapp/evento.py.
+    evento_nome: str = "Abrint Nordeste"
+
+    # Janela em que o endpoint aceita leads (datas locais de Brasilia, inclusive).
+    # Dupla funcao: libera o teste antes da feira e funciona como DISJUNTOR -- a
+    # pagina nao tem PIN (decisao do dono do produto em 02/11/2026, so seleciona o
+    # responsavel), entao quem descobrir a URL so consegue disparar mensagem
+    # enquanto a janela estiver aberta. Passada a feira, o endpoint se fecha sozinho.
+    evento_janela_inicio: str = "2026-11-02"
+    evento_janela_fim: str = "2026-11-08"
+
+    # Quem aparece na lista "Quem esta captando?" da pagina (primeiro nome, separado
+    # por virgula). A pagina le daqui (GET /eventos/config) e o servidor so aceita
+    # nomes desta lista -- o nome vai como variavel do template, entao texto livre
+    # deixaria qualquer um escrever o que quisesse numa mensagem da empresa.
+    evento_vendedores: str = "Wesley,Miriã,Daniel,Eliverto,César"
+
+    # Teto de leads aceitos por hora -- segundo disjuntor, contra loop ou abuso.
+    evento_max_leads_por_hora: int = 80
+
+    # Origem "Feiras e Eventos" no RD (a mesma do QR code).
+    rd_source_evento_rd_id: str = "687fe8cbd5677c001aa540b0"
+
+    # Template de abertura do evento. Vazio = o lead e SALVO e o card criado, mas
+    # nenhuma mensagem sai (status "sem_template"); scripts/reenviar_leads_evento.py
+    # manda os pendentes depois que o template for aprovado e configurado aqui.
+    # Corpo esperado: {{1}} = primeiro nome do lead, {{2}} = primeiro nome do vendedor.
+    # Aprovado no Meta em 02/11/2026 (categoria Marketing, pt_BR, botao "Pode mostrar").
+    # Corpo: "Oi, {{1}}! Aqui e o TEO ... O {{2}} me pediu pra te chamar depois da conversa
+    # de voces na Abrint Nordeste ...". Trocar por variavel de ambiente se mudar o texto.
+    whatsapp_agent_evento_template_name: str = "conexao_abrint_nordeste"
+    whatsapp_agent_evento_template_language: str = "pt_BR"
+
     # Etapa "Primeira Conexao" do pipeline [Máquina ISP] - Qualificação. O agente
     # so INICIA o atendimento (primeira resposta) com um lead cuja negociacao
     # esta nesta etapa -- se ja passou dela, e porque um humano assumiu, e o
