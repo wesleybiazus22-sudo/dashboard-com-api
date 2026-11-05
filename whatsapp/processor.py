@@ -33,6 +33,7 @@ log, nunca uma excecao que propaga.
 """
 
 import logging
+import re
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -323,6 +324,49 @@ def _pode_iniciar_atendimento(
     return bool(deal and deal.stage_rd_id == etapa_inicial)
 
 
+# Confirmacoes vazias do lead -- palavras que so encerram ("ok", "obrigado"), sem pedir nada.
+# "sim"/"nao" ficam de fora de proposito: sao RESPOSTA a uma pergunta, nao fechamento.
+_CONFIRMACOES_VAZIAS = {
+    "ok", "okay", "oks", "okk", "blz", "beleza", "certo", "combinado", "fechado", "perfeito", "show", "top",
+    "valeu", "vlw", "obrigado", "obrigada", "obg", "brigado", "brigada", "entendi", "tendi", "legal", "boa",
+    "joia", "massa", "tranquilo", "tmj", "muito", "ta", "bom",
+}
+
+
+def _e_confirmacao_vazia(texto: str | None) -> bool:
+    """True se a mensagem do lead so confirma/agradece ("ok", "ok, obrigada", "valeu", um
+    joinha) -- sem pergunta, dado nem pedido."""
+    bruto = (texto or "").strip()
+    if not bruto:
+        return False
+    palavras = re.findall(r"[a-z0-9]+", _sem_acento_minusculo(bruto))
+    if not palavras:  # so emoji/pontuacao (ex: joinha)
+        return len(bruto) <= 8
+    return len(palavras) <= 4 and all(p in _CONFIRMACOES_VAZIAS for p in palavras)
+
+
+def _confirmacao_ja_respondida(db: Session, phone_number: str, texto: str | None, wamid_atual: str) -> bool:
+    """True se `texto` e uma confirmacao vazia E a ultima resposta do agente a esse numero ja
+    foi uma resposta a OUTRA confirmacao vazia -- ou seja, a conversa ja foi fechada com uma
+    frase e o lead segue mandando "ok". Responder de novo so produz o ping-pong de "combinado /
+    qualquer coisa me chama" visto em 03/11/2026 (8 respostas a 8 "ok"). A PRIMEIRA confirmacao
+    apos uma mensagem normal sempre e respondida (pode ser a resposta a uma pergunta do agente)."""
+    if not _e_confirmacao_vazia(texto):
+        return False
+    ultimas = (
+        db.query(WhatsappMessage)
+        .filter(WhatsappMessage.phone_number == phone_number, WhatsappMessage.wamid != wamid_atual)
+        .order_by(WhatsappMessage.occurred_at.desc())
+        .limit(8)
+        .all()
+    )
+    for i, msg in enumerate(ultimas):
+        if msg.direction == "outbound":
+            anterior = next((m for m in ultimas[i + 1:] if m.direction == "inbound"), None)
+            return bool(anterior and _e_confirmacao_vazia(anterior.text_body))
+    return False
+
+
 def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_recebido: str, contact_name: str | None) -> None:
     """Chama o agente e manda a resposta de volta pro lead pelo WhatsApp de
     verdade (`send_text` -- valido aqui porque o LEAD acabou de mandar
@@ -337,32 +381,19 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
             )
             return
 
-        de_teste = _e_numero_de_teste(phone_number)
         deal = _deal_por_telefone(db, phone_number)
+        contexto_evento = contexto_do_evento(db, phone_number)
 
-        # Excecao a trava de origem: se o agente (via scripts/enviar_lembretes_reuniao.py,
-        # que manda templates pra QUALQUER negociacao do funil de qualificacao com
-        # reuniao marcada -- trafego pago ou nao) ja mandou alguma mensagem pra esse
-        # telefone antes, a decisao de "vale a pena falar com esse lead" ja foi
-        # tomada -- a resposta dele (ex: pedindo pra remarcar) nao pode cair no
-        # vazio so por causa da origem. Mesmo criterio que ja libera a continuacao
-        # de conversa em `_pode_iniciar_atendimento` logo abaixo.
-        ja_engajado = _agente_ja_engajou(db, phone_number)
-        veio_do_qrcode = _veio_do_qrcode(db, phone_number)
+        # Mensagem REATIVA (o lead escreveu primeiro): o agente SEMPRE atende. Nao ha mais trava
+        # de origem (QR code / trafego pago / evento) nem de etapa do funil -- quem manda mensagem
+        # esta pedindo conversa. Visto em 05/11/2026: lead de evento disse "Oi" e ficou no vacuo
+        # porque nenhuma trava o reconhecia. A unica trava que resta e a do piloto
+        # (WHATSAPP_AGENT_RESTRICT_TO_PHONE_NUMBERS, vazia por padrao) e o anti-"ok" abaixo.
 
-        if not de_teste and not ja_engajado and not veio_do_qrcode and not _lead_de_trafego_pago(db, deal):
+        if _confirmacao_ja_respondida(db, phone_number, texto, wamid_recebido):
             logger.info(
-                "Agente: numero %s nao tem negociacao de trafego pago (deal=%s) -- mensagem guardada, sem resposta. "
-                "Se o card ainda nao sincronizou, o reprocessamento tenta de novo.",
-                phone_number, deal.rd_id if deal else None,
-            )
-            return
-
-        if not de_teste and not _pode_iniciar_atendimento(db, phone_number, deal, veio_do_qrcode=veio_do_qrcode):
-            logger.info(
-                "Agente: numero %s -- negociacao %s ja passou de 'Primeira Conexao' (etapa %s) e o agente ainda nao "
-                "havia engajado -- humano assumiu, mensagem guardada sem resposta.",
-                phone_number, deal.rd_id if deal else None, deal.stage_rd_id if deal else None,
+                "Agente: numero %s -- confirmacao vazia (%r) depois de outra ja respondida; conversa encerrada, sem resposta.",
+                phone_number, texto,
             )
             return
 
@@ -402,7 +433,7 @@ def _responder_com_agente(db: Session, *, phone_number: str, texto: str, wamid_r
 
         resposta, _ = conversar(
             db, historico, texto, telefone=phone_number, deal_rd_id=deal_rd_id, modo_teste=False, nome_lead=nome_lead,
-            contexto_evento=contexto_do_evento(db, phone_number),
+            contexto_evento=contexto_evento,
         )
         if not resposta:
             logger.warning("Agente: resposta vazia pro numero %s -- nada enviado.", phone_number)

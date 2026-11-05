@@ -17,20 +17,40 @@ verdade). Pontos que a documentacao publica nao deixa claro:
   faltando qualquer um dos dois, a API recusa com 422.
 """
 
+import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import CrmContact, CrmDeal, CrmOrganization
+from database.models import CrmContact, CrmDeal, CrmOrganization, CrmTask
 from ingestion.rd_crm.client import RDCrmClient
 from ingestion.rd_crm.entities import upsert_by_rd_id
+
+logger = logging.getLogger(__name__)
 
 # Tipos de tarefa aceitos pela API (confirmado pelos valores ja usados na base
 # sincronizada -- ver `crm_tasks.type`). Usar um fora dessa lista nao da erro
 # na hora, mas tambem nao aparece corretamente na UI do RD.
 TIPOS_TAREFA_VALIDOS = {"email", "call", "meeting", "whatsapp", "visit", "task"}
+
+# Teto do nome (assunto) da tarefa. Nenhuma tarefa do CRM -- nem as criadas a mao --
+# passa de 253 caracteres, o que aponta pra um limite de 255 no RD. Texto acima disso
+# faz a criacao falhar, e as ferramentas do agente (transferir_para_consultora,
+# encaminhar_para_humano) montam o nome com um trecho livre escrito pelo modelo
+# (`resumo`/`motivo`): num lead de evento esse trecho e longo, a tarefa nao era criada
+# e o agente respondia "instabilidade" ao lead (03/11/2026). Corta aqui, no ponto
+# unico de escrita, pra nenhum chamador depender de lembrar disso.
+TAMANHO_MAX_NOME_TAREFA = 250
+
+
+def limitar_nome_tarefa(texto: str) -> str:
+    """Corta o texto no teto do RD, com reticencias, sem deixar espaco sobrando no fim."""
+    texto = " ".join((texto or "").split())
+    if len(texto) <= TAMANHO_MAX_NOME_TAREFA:
+        return texto
+    return texto[: TAMANHO_MAX_NOME_TAREFA - 1].rstrip() + "…"
 
 
 def mover_negociacao_para_etapa(db: Session, deal_rd_id: str, stage_rd_id: str) -> dict:
@@ -73,13 +93,43 @@ def criar_tarefa(
     corpo = {
         "deal_id": deal_rd_id,
         "type": tipo,
-        "name": texto,
+        "name": limitar_nome_tarefa(texto),
         "due_date": prazo.isoformat(),
         "owner_ids": [responsavel_rd_id],
         "created_by_id": criado_por_rd_id,
     }
     resposta = client.post("/tasks", json={"data": corpo})
-    return resposta["data"]
+    dados = resposta["data"]
+    _espelhar_tarefa(
+        db, dados, deal_rd_id=deal_rd_id, tipo=tipo, nome=corpo["name"],
+        responsavel_rd_id=responsavel_rd_id, prazo=prazo,
+    )
+    return dados
+
+
+def _espelhar_tarefa(db: Session, dados: dict, *, deal_rd_id: str, tipo: str, nome: str, responsavel_rd_id: str, prazo: datetime) -> None:
+    """Grava a tarefa recem-criada em `crm_tasks` na hora, em vez de esperar o proximo
+    sync (ate 15 min). O agente consulta essa tabela pra saber se um encaminhamento JA
+    foi registrado -- sem o espelho, a tarefa criada agora so apareceria la depois, e
+    o agente repetiria o mesmo registro a cada mensagem do lead. O sync seguinte
+    atualiza a mesma linha (chave rd_id). Em SAVEPOINT e a prova de falha: a tarefa ja
+    existe no RD, entao um erro aqui nunca pode derrubar quem chamou."""
+    if db is None or not isinstance(dados, dict) or not dados.get("id"):
+        return
+    try:
+        with db.begin_nested():
+            upsert_by_rd_id(db, CrmTask, dados["id"], {
+                "deal_rd_id": deal_rd_id,
+                "type": tipo,
+                "subject": nome,
+                "owner_rd_id": responsavel_rd_id,
+                "status": dados.get("status") or "open",
+                "due_at": prazo,
+                "completed_at": None,
+                "raw": dados,
+            })
+    except Exception:  # noqa: BLE001 -- so um espelho; o sync recompoe
+        logger.warning("Nao consegui espelhar a tarefa %s em crm_tasks -- o proximo sync recompoe.", dados.get("id"), exc_info=True)
 
 
 def atualizar_prazo_tarefa(db: Session, task_rd_id: str, *, prazo: datetime) -> dict:

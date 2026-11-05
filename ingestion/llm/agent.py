@@ -65,12 +65,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from config.settings import settings
 from database.models import AgendaEventoMicrosoft, CrmContact, CrmDeal, CrmTask, CrmUser
 from ingestion.llm.pricing import registrar_chamada
 from ingestion.llm.retrieval import buscar_contexto, montar_bloco_contexto
+from ingestion.rd_crm.entities import parse_dt
 from ingestion.rd_crm.actions import (
     atualizar_prazo_tarefa,
     criar_negociacao_com_contato,
@@ -191,11 +193,14 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
 - IMPORTANTE: você SUGERE horário com base na agenda real, mas NUNCA confirma a reunião de verdade -- isso é sempre com a consultora. Depois de chamar `transferir_para_consultora`, a mensagem pro lead deixa claro que o horário (quando houver) ainda vai ser CONFIRMADO pela consultora, nunca que já está marcado/fechado -- ex: "Combinado, vou deixar [dia/hora] registrado e a [nome da consultora] confirma com você em breve." Nunca diga "está marcado" ou "sua reunião é dia X" sem a consultora ter confirmado de verdade.
 - NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo transferido pra consultora), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (a consultora combinou um horário com ele, ou às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário.
-- Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma."""
+- Quando você usa uma ferramenta no meio de uma resposta, o texto de antes e o texto de depois do resultado da ferramenta formam UMA ÚNICA mensagem pro lead, mandada de uma vez -- nunca repita, na parte de depois, uma pergunta ou frase que você já fez na parte de antes (ex: não repita os mesmos horários de novo só porque chamou uma ferramenta no meio). ANTES DE MANDAR, releia o texto completo (antes + depois da ferramenta): se a mesma pergunta aparecer duas vezes, tire uma.
+- FALHAS TÉCNICAS SÃO ASSUNTO INTERNO, NUNCA DO LEAD: jamais diga ao lead "falha técnica", "instabilidade", "sistema com problema", "travadinha", "erro" nem qualquer variação, e não peça desculpas por isso -- ele não tem nada a ver com isso e isso destrói a confiança. Se uma ferramenta devolver erro, resolva por trás (chame `encaminhar_para_humano` UMA vez) e siga conversando com o lead só sobre o próximo passo, como se nada tivesse acontecido (ex: "a consultora confirma esse horário com você em breve" -- o que de fato vai acontecer). Nunca repita a ferramenta que acabou de falhar nem o mesmo encaminhamento a cada mensagem do lead. No máximo UMA desculpa na conversa inteira, e só por um erro seu de verdade (informação errada), nunca por "sistema".
+- NÃO FIQUE RESPONDENDO A CONFIRMAÇÕES: quando o lead só confirma ou agradece ("ok", "beleza", "obrigado", "valeu", um joinha) e o assunto já está resolvido, responda no MÁXIMO uma frase curta de fechamento -- sem repetir horário, combinado, nome da consultora nem pedido de desculpas, e sem puxar assunto novo. Se ele mandar outra confirmação logo depois, não há mais o que dizer."""
 
 
 def _montar_contexto_dinamico(
     nome_lead: str | None = None, *, sem_cadastro: bool = False, contexto_evento: dict | None = None,
+    handoff_registrado: str | None = None,
 ) -> str:
     """Parte DINAMICA do system prompt -- data/hora atual (sem isso o modelo
     nao tem como saber que dia e hoje pra calcular "amanha de manha" etc de
@@ -210,12 +215,13 @@ def _montar_contexto_dinamico(
         f'\nVocê está falando com {nome_lead}. Use o nome dele de vez em quando, com naturalidade -- não em toda mensagem, isso soa forçado.'
         if nome_lead else ""
     )
-    # Sinaliza o lead de QR code (chegou sem nenhum card no CRM). Vai na parte
+    # Sinaliza o lead sem cadastro (chamou sem nenhum card no CRM: QR code, link, indicacao...). Vai na parte
     # DINAMICA porque muda de lead pra lead -- e deixa de valer assim que
     # `criar_negociacao_no_crm` roda e o card passa a existir.
     linha_cadastro = (
-        "\nESTE LEAD AINDA NÃO TEM CADASTRO no nosso sistema -- ele chegou por um QR code, "
-        "não por anúncio. Antes de falar de reunião, colete na conversa, aos poucos e sem "
+        "\nESTE LEAD AINDA NÃO TEM CADASTRO no nosso sistema -- ele chamou por conta própria "
+        "(QR code, link, indicação ou qualquer outro caminho). Converse normalmente com ele desde a "
+        "primeira mensagem, seja qual for o assunto. Antes de falar de reunião, colete na conversa, aos poucos e sem "
         "parecer formulário: nome do provedor, nome dele, quantidade de assinantes e e-mail. "
         "NUNCA peça o telefone (já temos, é este número). Ao pedir o e-mail, dê um motivo "
         "que faça sentido pro lead (mandar o material, o resumo do que conversaram), NUNCA "
@@ -275,9 +281,19 @@ def _montar_contexto_dinamico(
                 " O que o próprio lead já contou ao " + vend + " (NÃO pergunte de novo, use direto): "
                 + "; ".join(sabido) + "."
             )
+    # Encaminhamento ja registrado (ver `_handoff_registrado`): sem esta linha o modelo so enxerga
+    # o proprio texto anterior e tende a repetir o registro -- e o pedido de desculpas -- a cada "ok".
+    linha_handoff = (
+        f"\nJÁ REGISTRADO NO CRM: {handoff_registrado}. NÃO chame `transferir_para_consultora` nem "
+        "`encaminhar_para_humano` de novo para esse mesmo pedido, não volte a dizer que 'registrou' nem a "
+        "reconfirmar o combinado a cada mensagem, e nunca fale de falha técnica nem peça desculpas por isso. "
+        "Se o lead só confirmar ('ok', 'obrigado'), no máximo uma frase curta de fechamento. Só use essas "
+        "ferramentas de novo se ele pedir outro horário ou tratar de um assunto diferente."
+        if handoff_registrado else ""
+    )
     return (
         f"Hoje é {dia_semana}, {agora:%d/%m/%Y}, agora são {agora:%H:%M} (horário de Brasília). "
-        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}{linha_cadastro}{linha_evento}'
+        f'Use isso pra calcular datas relativas ("amanhã", "sexta-feira", etc) corretamente.{linha_nome}{linha_cadastro}{linha_evento}{linha_handoff}'
     )
 
 
@@ -473,6 +489,74 @@ def _dono_da_negociacao(db: Session, deal_rd_id: str) -> CrmUser | None:
     if not deal or not deal.current_owner_rd_id:
         return None
     return db.query(CrmUser).filter(CrmUser.rd_id == deal.current_owner_rd_id).one_or_none()
+
+
+_PREFIXOS_TRANSFERENCIA = ("Lead aceitou", "Lead topou agendar")
+_PREFIXOS_HUMANO = ("Assumir conversa do agente",)
+
+
+def _detalhe_erro(exc: BaseException) -> str:
+    """Texto util de um erro pro log: inclui o CORPO da resposta HTTP quando ha (o `str()` de
+    um HTTPStatusError so traz a URL e o status -- o motivo real, ex: 422 de validacao, fica
+    no corpo). Sem isso a falha de 03/11/2026 so foi diagnosticavel por dedução."""
+    resposta = getattr(exc, "response", None)
+    corpo = ""
+    if resposta is not None:
+        try:
+            corpo = f" | corpo: {resposta.text[:400]}"
+        except Exception:  # noqa: BLE001
+            corpo = ""
+    return f"{type(exc).__name__}: {exc}{corpo}"
+
+
+def _tarefas_recentes_do_agente(
+    db: Session, deal_rd_id: str | None, prefixos: tuple[str, ...], *, janela: timedelta,
+) -> list[CrmTask]:
+    """Tarefas ABERTAS desse card, criadas pelo agente (assunto comeca com um dos
+    `prefixos`) dentro da `janela`. Base da dedup: depois de registrar um
+    encaminhamento, o agente nao pode registrar o mesmo de novo a cada mensagem do lead.
+    A tarefa recem-criada ja esta aqui (`criar_tarefa` espelha na hora). A prova de
+    falha: qualquer erro de consulta devolve [] -- na duvida o agente segue como antes."""
+    if not deal_rd_id:
+        return []
+    try:
+        with db.begin_nested():
+            candidatas = (
+                db.query(CrmTask)
+                .filter(
+                    CrmTask.deal_rd_id == deal_rd_id,
+                    CrmTask.status.in_(("open", "pending")),
+                    or_(*[CrmTask.subject.like(p + "%") for p in prefixos]),
+                )
+                .all()
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("Agente: nao consegui consultar tarefas recentes da negociacao %s.", deal_rd_id, exc_info=True)
+        return []
+    limite = datetime.now(timezone.utc) - janela
+    recentes = []
+    for t in candidatas:
+        criada = parse_dt((t.raw or {}).get("created_at")) or t.synced_at
+        if criada is not None and criada.tzinfo is None:
+            criada = criada.replace(tzinfo=timezone.utc)
+        if criada is None or criada >= limite:
+            recentes.append(t)
+    return recentes
+
+
+def _handoff_registrado(db: Session, deal_rd_id: str | None) -> str | None:
+    """Descricao curta de um encaminhamento JA registrado pra esse lead (tarefa aberta
+    recente pra consultora ou pro time), ou None. Vai pro contexto do modelo a cada turno:
+    e o que faz o agente PARAR de repetir o registro e o pedido de desculpas."""
+    transferencias = _tarefas_recentes_do_agente(db, deal_rd_id, _PREFIXOS_TRANSFERENCIA, janela=timedelta(hours=12))
+    if transferencias:
+        assunto = transferencias[0].subject or ""
+        trecho = re.match(r"Lead aceitou (.+?) pra demonstra", assunto)
+        quando = f" ({trecho.group(1)})" if trecho else ""
+        return f"a consultora já foi avisada desse pedido{quando} e vai confirmar com o lead"
+    if _tarefas_recentes_do_agente(db, deal_rd_id, _PREFIXOS_HUMANO, janela=timedelta(hours=2)):
+        return "o time já foi acionado pra assumir esta conversa e vai falar com o lead"
+    return None
 
 
 def _pode_usar_calendario() -> bool:
@@ -836,15 +920,43 @@ def _executar_ferramenta(
         else:
             texto_tarefa = f"Lead topou agendar demonstração, sem horário aceito ainda -- ligar/chamar no WhatsApp pra combinar. Resumo: {resumo}"
 
-        criar_tarefa(
-            db,
-            deal_rd_id,
-            tipo="call",
-            texto=texto_tarefa,
-            responsavel_rd_id=owner.rd_id,
-            criado_por_rd_id=owner.rd_id,
-            prazo=datetime.now(_FUSO_BRASIL) + timedelta(hours=2),
-        )
+        # Dedup: mesmo pedido ja registrado -> nao cria outra tarefa nem manda o modelo repetir
+        # o registro (foi o que gerou a enxurrada de "instabilidade" em 03/11/2026).
+        ja_transferiu = _tarefas_recentes_do_agente(db, deal_rd_id, _PREFIXOS_TRANSFERENCIA, janela=timedelta(hours=12))
+        if horario_iso:
+            repetido = any(texto_horario in (t.subject or "") for t in ja_transferiu)
+        else:
+            repetido = any((t.subject or "").startswith("Lead topou agendar") for t in ja_transferiu)
+        if not repetido:
+            # Falha anterior desse mesmo pedido ja foi pro time (tarefa "Assumir conversa"): nao tenta de novo.
+            repetido = bool(_tarefas_recentes_do_agente(db, deal_rd_id, _PREFIXOS_HUMANO, janela=timedelta(minutes=60)))
+        if repetido:
+            return (
+                f"[JÁ REGISTRADO -- nada a fazer] A {nome_consultora} já foi avisada desse pedido e vai "
+                "confirmar com o lead. NÃO chame esta ferramenta de novo, NÃO diga outra vez que registrou e "
+                "NÃO fale de erro nem peça desculpas. Responda só ao que o lead acabou de dizer; se ele só "
+                "confirmou ('ok', 'obrigado'), no máximo uma frase curta de fechamento."
+            )
+
+        prazo_tarefa = datetime.now(_FUSO_BRASIL) + timedelta(hours=2)
+        try:
+            criar_tarefa(
+                db, deal_rd_id, tipo="call", texto=texto_tarefa,
+                responsavel_rd_id=owner.rd_id, criado_por_rd_id=owner.rd_id, prazo=prazo_tarefa,
+            )
+        except Exception as exc:  # noqa: BLE001 -- uma segunda tentativa, enxuta, antes de desistir
+            logger.warning(
+                "Agente: tarefa 'call' da transferencia falhou (negociação %s) -- tentando versão enxuta. %s",
+                deal_rd_id, _detalhe_erro(exc),
+            )
+            curto = (
+                f"Lead aceitou {texto_horario} pra demonstração -- confirmar com o lead (sugestão, não confirmado na agenda)."
+                if horario_iso else "Lead topou agendar demonstração -- combinar horário pelo WhatsApp."
+            )
+            criar_tarefa(
+                db, deal_rd_id, tipo="task", texto=curto,
+                responsavel_rd_id=owner.rd_id, criado_por_rd_id=owner.rd_id, prazo=prazo_tarefa,
+            )
 
         if horario_iso:
             return (
@@ -949,6 +1061,11 @@ def _executar_ferramenta(
         if modo_teste or not deal_rd_id:
             return f"[MODO TESTE -- nada foi alterado no CRM] Encaminhamento pra humano seria criado agora. Motivo: {motivo}"
         owner = _dono_da_negociacao(db, deal_rd_id)
+        if owner and _tarefas_recentes_do_agente(db, deal_rd_id, _PREFIXOS_HUMANO, janela=timedelta(minutes=30)):
+            return (
+                "[JÁ ENCAMINHADO -- nada a fazer] O time já foi acionado pra esta conversa há poucos minutos. "
+                "NÃO chame esta ferramenta de novo, NÃO fale de erro nem peça desculpas; só responda ao lead."
+            )
         if owner:
             criar_tarefa(
                 db,
@@ -1112,6 +1229,7 @@ def conversar(
         {"type": "text", "text": _SYSTEM_PROMPT_BASE, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _montar_contexto_dinamico(
             nome_lead=_primeiro_nome_lead(nome_lead), sem_cadastro=deal_rd_id is None, contexto_evento=contexto_evento,
+            handoff_registrado=None if modo_teste else _handoff_registrado(db, deal_rd_id),
         )},
     ]
     mensagens = list(historico) + [{"role": "user", "content": mensagem}]
@@ -1187,17 +1305,30 @@ def conversar(
                     modo_teste=modo_teste, estado=estado,
                 )
                 deal_rd_id = estado.get("deal_rd_id") or deal_rd_id
-            except Exception:  # noqa: BLE001 -- uma ferramenta falhando (ex: negociacao apagada
+            except Exception as exc:  # noqa: BLE001 -- uma ferramenta falhando (ex: negociacao apagada
                 # no RD, 404) nunca pode derrubar o turno inteiro e deixar o lead sem resposta.
                 db.rollback()
                 logger.exception(
-                    "Agente: falha ao executar ferramenta %s (negociação %s).", chamada.name, deal_rd_id,
+                    "Agente: falha ao executar ferramenta %s (negociação %s). %s",
+                    chamada.name, deal_rd_id, _detalhe_erro(exc),
                 )
-                resultado = (
-                    "[ERRO TECNICO ao executar essa acao -- nao foi possivel confirmar no CRM/agenda agora] "
-                    "Avise o lead com naturalidade que houve um problema tecnico e que alguem vai confirmar "
-                    "em breve, e chame encaminhar_para_humano."
-                )
+                # A falha e INTERNA: o lead nao deve ouvir "erro", "instabilidade" nem pedido de
+                # desculpas (isso gerou 8 mensagens de desculpa seguidas em 03/11/2026). Pro lead
+                # o proximo passo e o mesmo -- alguem do time confirma -- e isso e verdade, porque
+                # `encaminhar_para_humano` abre a tarefa pro time.
+                if chamada.name == "encaminhar_para_humano":
+                    resultado = (
+                        "[PROBLEMA INTERNO -- NÃO é assunto do lead] Não chame mais nenhuma ferramenta de "
+                        "encaminhamento. NÃO mencione erro, falha, instabilidade nem peça desculpas: responda ao "
+                        "lead normalmente, dizendo só que alguém do time vai falar com ele em breve."
+                    )
+                else:
+                    resultado = (
+                        "[PROBLEMA INTERNO -- NÃO é assunto do lead] A ação não foi registrada. NÃO mencione erro, "
+                        "falha, instabilidade, sistema nem peça desculpas ao lead. Chame `encaminhar_para_humano` "
+                        "UMA vez (descreva o que faltou registrar) e responda ao lead normalmente, dizendo que a "
+                        "consultora vai confirmar com ele em breve -- sem repetir isso nas próximas mensagens."
+                    )
             resultados.append({"type": "tool_result", "tool_use_id": chamada.id, "content": resultado})
         mensagens.append({"role": "user", "content": resultados})
 
