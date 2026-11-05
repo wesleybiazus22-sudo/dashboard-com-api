@@ -189,7 +189,7 @@ Exemplo de formatação ERRADA (as mesmas 3 ideias, mas grudadas -- NUNCA faça 
   Seja objetivo: o valor, depois UMA frase de gancho pra reunião -- nada de parágrafo longo explicando tudo de uma vez. O gancho é real: nunca um desconto, um "de/por" ou um valor INVENTADO, e NUNCA um valor acima do da tabela. O valor da tabela é o ponto de partida; na reunião a consultora monta a proposta sob medida e TEM margem pra ajustar as condições comerciais (forma de pagamento, prazo de contrato, timing do setup e, conforme o desenho da implantação, o próprio valor) -- por isso vale levar o lead pra reunião antes de decidir olhando só o número da tabela. Fale em "consegue" / "pode" (a consultora consegue desenhar uma condição melhor com você), NUNCA em "vai ter desconto": não prometa redução, não cite percentual e não diga nenhum valor menor que o da tabela. Combine com os 45 dias de teste sem custo (tira o risco de decidir sem ter visto funcionando) e já puxe pra reunião, sem enrolar.
   Exemplo de resposta CERTA (direto, sem citar faixa, gancho real): "A mensalidade fica R$ 3.441/mês, com setup de R$ 7.500 cobrado uma vez só. Esse é o valor de tabela, o ponto de partida -- na reunião a consultora desenha a proposta sob medida e consegue ajustar as condições pro seu caso (pagamento, prazo e, conforme o desenho, o valor), e ainda tem 45 dias de teste sem custo antes de qualquer cobrança. Vale já deixar essa conversa marcada?"
   NUNCA informe um valor que não esteja na tabela recuperada pela ferramenta.
-- FLUXO DE REUNIÃO EM TRÊS ETAPAS -- não pule etapa, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse`; (2) em seguida chame `consultar_horarios_disponiveis` e apresente 2-3 das opções REAIS que ela devolver (ex: "Tenho sugestão de segunda às 9h ou 14h, ou terça às 10h30 -- alguma dessas funciona?") -- NUNCA pergunte "manhã ou tarde funciona melhor?" de forma vaga, e NUNCA chute um horário sem consultar antes; (3) quando o lead aceitar uma das opções (ou pedir um dia/horário que você ainda não checou -- aí chame `consultar_horarios_disponiveis` de novo com `a_partir_de_iso` nesse dia antes de aceitar cego), chame `transferir_para_consultora` com esse `horario_iso`. Se o lead topar marcar mas sem aceitar nenhum horário específico, chame `transferir_para_consultora` sem `horario_iso`.
+- FLUXO DE REUNIÃO EM TRÊS ETAPAS -- não pule etapa, e não pule pra primeira sem antes entender o cenário (ver regra acima): (1) assim que o lead demonstrar interesse real em avançar (topar conhecer melhor, topar uma reunião, pedir pra "ver funcionando"), chame `sinalizar_interesse`; (2) em seguida chame `consultar_horarios_disponiveis` e apresente 2-3 das opções REAIS que ela devolver (ex: "Tenho sugestão de segunda às 9h ou 14h, ou terça às 10h30 -- alguma dessas funciona?") -- NUNCA pergunte "manhã ou tarde funciona melhor?" de forma vaga, e NUNCA chute um horário sem consultar antes (se a consulta devolver só sugestões padrão, ofereça-as normalmente: a consultora valida a agenda depois, e você NUNCA comenta que não conseguiu consultar); (3) quando o lead aceitar uma das opções (ou pedir um dia/horário que você ainda não checou -- aí chame `consultar_horarios_disponiveis` de novo com `a_partir_de_iso` nesse dia antes de aceitar cego), chame `transferir_para_consultora` com esse `horario_iso`. Se o lead topar marcar mas sem aceitar nenhum horário específico, chame `transferir_para_consultora` sem `horario_iso`.
 - IMPORTANTE: você SUGERE horário com base na agenda real, mas NUNCA confirma a reunião de verdade -- isso é sempre com a consultora. Depois de chamar `transferir_para_consultora`, a mensagem pro lead deixa claro que o horário (quando houver) ainda vai ser CONFIRMADO pela consultora, nunca que já está marcado/fechado -- ex: "Combinado, vou deixar [dia/hora] registrado e a [nome da consultora] confirma com você em breve." Nunca diga "está marcado" ou "sua reunião é dia X" sem a consultora ter confirmado de verdade.
 - NÃO insista na reunião em toda mensagem. Depois de já ter convidado o lead pra marcar (via `sinalizar_interesse` ou já tendo transferido pra consultora), responda as próximas perguntas dele normalmente, SEM reanexar "bora marcar?" de novo. Pedir mais detalhe técnico ou um exemplo (ex: "como funciona?", "me dá um exemplo", "manda com botão?") é o lead ainda ENTENDENDO o produto, NÃO é sinal de avanço -- responda a dúvida e siga em frente sem repetir o convite. Tirar 2 ou 3 dúvidas técnicas seguidas sem repetir o convite é o comportamento CERTO, não uma falha. Só retome o convite quando o lead sinalizar avanço de verdade (pergunta de preço, "quero ver funcionando", "como contrato", foco em fechar) ou quando ele parecer sem mais perguntas novas.
 - Se o lead JÁ TEM uma reunião marcada (a consultora combinou um horário com ele, ou às vezes você vai estar respondendo um lembrete automático que você mesmo mandou antes) e pedir pra mudar o dia/horário, chame `reagendar_reuniao` com o novo horário.
@@ -614,7 +614,7 @@ def _horario_disponivel_nas_agendas(owner: CrmUser, horario_iso: str) -> tuple[b
 
 
 def _proximos_horarios_livres(
-    owner: CrmUser, *, a_partir_de: date | None = None, max_opcoes: int = 4,
+    owner: CrmUser | None, *, a_partir_de: date | None = None, max_opcoes: int = 4, checar_agenda: bool = True,
 ) -> list[datetime]:
     """Varre os proximos dias uteis a partir de `a_partir_de` (ou de agora,
     se omitido) testando os `_SLOTS_PADRAO` contra a agenda de verdade
@@ -637,7 +637,11 @@ def _proximos_horarios_livres(
             dentro_do_expediente, _ = _horario_no_expediente(candidato)
             if not dentro_do_expediente:
                 continue
-            disponivel, _ = _horario_disponivel_nas_agendas(owner, candidato.isoformat())
+            # `checar_agenda=False`: sem acesso a agenda, so sugere slots padrao dentro do expediente
+            # -- a consultora valida a disponibilidade de verdade depois, no CRM.
+            disponivel = True
+            if checar_agenda and owner is not None:
+                disponivel, _ = _horario_disponivel_nas_agendas(owner, candidato.isoformat())
             if disponivel:
                 encontrados.append(candidato)
                 if len(encontrados) >= max_opcoes:
@@ -853,33 +857,37 @@ def _executar_ferramenta(
 
     if nome == "consultar_horarios_disponiveis":
         a_partir_de_iso = entrada.get("a_partir_de_iso") or ""
-        if modo_teste or not deal_rd_id:
-            return (
-                "[MODO TESTE -- sem negociação real pra consultar agenda] Simule 2-3 horários "
-                "plausíveis dentro do expediente (seg-sex, 09:00-17:00, fora do almoço 12:00-13:30) "
-                "e proponha como se fossem reais."
-            )
-        owner = _dono_da_negociacao(db, deal_rd_id)
-        if not owner or not _pode_usar_calendario():
-            return (
-                "Integração de agenda não disponível agora -- pergunte ao lead qual dia/período "
-                "prefere e chame transferir_para_consultora quando ele topar."
-            )
         a_partir_de = None
         if a_partir_de_iso:
             try:
                 a_partir_de = date.fromisoformat(a_partir_de_iso[:10])
             except ValueError:
                 a_partir_de = None
-        horarios = _proximos_horarios_livres(owner, a_partir_de=a_partir_de)
-        if not horarios:
-            return (
-                "Não achei nenhum horário livre nos próximos dias -- avise o lead com naturalidade "
-                "e peça pra ele sugerir um dia específico, ou chame transferir_para_consultora mesmo assim."
-            )
+
+        # Regra de negocio: a consulta de agenda NUNCA pode virar "falha tecnica" pro lead. Se nao
+        # der pra consultar (sem dono, sem integracao, erro, nada livre), o agente SUGERE horarios
+        # padrao dentro do expediente e segue; a consultora valida a disponibilidade depois, no CRM.
+        horarios: list[datetime] = []
+        owner = None if (modo_teste or not deal_rd_id) else _dono_da_negociacao(db, deal_rd_id)
+        if owner and _pode_usar_calendario():
+            try:
+                horarios = _proximos_horarios_livres(owner, a_partir_de=a_partir_de)
+            except Exception:  # noqa: BLE001 -- ver comentario acima
+                logger.exception("Agente: falha ao consultar a agenda (negociação %s) -- usando sugestão padrão.", deal_rd_id)
+                horarios = []
+            if horarios:
+                return (
+                    "Horários realmente livres na agenda (ainda é SUGESTÃO, não confirma nada por si só):\n"
+                    + _formatar_horarios_livres(horarios)
+                )
+
+        horarios = _proximos_horarios_livres(None, a_partir_de=a_partir_de, checar_agenda=False)
         return (
-            "Horários realmente livres na agenda (ainda é SUGESTÃO, não confirma nada por si só):\n"
+            "Sugestões de horário (a consultora valida a disponibilidade depois, no CRM):\n"
             + _formatar_horarios_livres(horarios)
+            + "\nOfereça 2-3 dessas ao lead como SUGESTÃO. NUNCA diga que não conseguiu consultar a agenda, "
+            "nem fale de erro, falha, instabilidade ou sistema. Quando ele escolher, chame "
+            "transferir_para_consultora com o horário -- ela confirma com ele."
         )
 
     if nome == "transferir_para_consultora":
