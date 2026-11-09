@@ -18,5 +18,6 @@ page = st.navigation({"Máquina ISP": [
     section("3_", "Distribuição geográfica", "Geografia", "🗺️"),
     section("6_", "Agente de atendimento", "Agente", "🤖"),
     section("7_", "Convite manual · Agente", "Convite_Agente", "🙋"),
+    section("8_", "Distribuição SDR", "Distribuicao_SDR", "🧭"),
 ]}, expanded=True)
 page.run()
