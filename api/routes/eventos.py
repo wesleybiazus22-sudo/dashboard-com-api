@@ -12,7 +12,8 @@ teto de leads por hora e idempotencia por `client_id` (ver `registrar_lead`).
 """
 
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from database.connection import get_db
 from database.models import EventoLead
+from ingestion.rd_crm.actions import criar_negociacao_com_contato, criar_tarefa
 from whatsapp import evento
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,75 @@ def criar_lead(dados: LeadEntrada, db: Session = Depends(get_db)):
         lead.erro = f"{type(exc).__name__}: {str(exc)[:300]}"
         db.commit()
     return _resposta(lead)
+
+
+class ThunderaLeadEntrada(BaseModel):
+    nome: str = Field(min_length=1, max_length=120)
+    empresa: str = Field(min_length=1, max_length=200)
+    telefone: str = Field(min_length=6, max_length=40)
+    email: str | None = Field(default=None, max_length=200)
+    pais: str | None = Field(default=None, max_length=80)
+    estado: str | None = Field(default=None, max_length=120)
+    cidade: str | None = Field(default=None, max_length=120)
+
+
+# Disjuntor simples (sem tabela propria: este endpoint so cria o card, nao aciona
+# agente nenhum, entao o custo de um excesso e so "polui o CRM", nao "manda
+# WhatsApp indevido" -- um teto em memoria basta). Zera sozinho a cada hora;
+# reinicio do processo (deploy, o servidor gratuito dormir/acordar) tambem zera,
+# o que e aceitavel pra essa finalidade.
+_thundera_lead_timestamps: list[float] = []
+_THUNDERA_MAX_LEADS_POR_HORA = 60
+
+
+@eventos_app.post("/thundera-leads")
+def criar_lead_thundera(dados: ThunderaLeadEntrada, db: Session = Depends(get_db)):
+    """Formulario do site Thundera IA Lite (thundera-lite-br-py, js/leads.js):
+    cria organizacao + contato + negociacao no funil '[ThunderaLite] -
+    Qualificacao', etapa 'Primeira conexao'. Ao contrario de /eventos/leads
+    (exclusivo da Maquina.ISP), NAO aciona nenhum agente de WhatsApp -- a pagina
+    continua salvando o lead localmente e exportando planilha de qualquer forma;
+    esta chamada e so uma tentativa extra, best-effort, de ja deixar o card
+    pronto no CRM."""
+    agora = time.monotonic()
+    global _thundera_lead_timestamps
+    _thundera_lead_timestamps = [t for t in _thundera_lead_timestamps if agora - t < 3600]
+    if len(_thundera_lead_timestamps) >= _THUNDERA_MAX_LEADS_POR_HORA:
+        raise HTTPException(status_code=429, detail="Limite de leads por hora atingido.")
+    _thundera_lead_timestamps.append(agora)
+
+    nome_empresa = dados.empresa.strip() or dados.nome.strip()
+    local = " / ".join(x for x in (dados.cidade, dados.estado, dados.pais) if x and x.strip())
+
+    try:
+        negociacao = criar_negociacao_com_contato(
+            db,
+            nome_empresa=nome_empresa,
+            nome_contato=dados.nome.strip(),
+            telefone=dados.telefone.strip(),
+            owner_rd_id=settings.thundera_lite_owner_rd_id,
+            pipeline_rd_id=settings.rd_pipeline_thundera_lite_rd_id,
+            stage_rd_id=settings.rd_stage_thundera_lite_entrada_rd_id,
+            source_rd_id=settings.rd_source_evento_rd_id,
+            email=dados.email,
+        )
+    except Exception as exc:  # noqa: BLE001 -- a pagina ja salvou o lead local; so loga e devolve erro
+        logger.exception("Thundera Lite: falha ao criar o card no CRM para %r.", dados.nome)
+        raise HTTPException(status_code=502, detail="Falha ao registrar no CRM.") from exc
+
+    if local:
+        try:
+            criar_tarefa(
+                db, negociacao["id"], tipo="task",
+                texto=f"Lead captado pelo formulario do site Thundera IA Lite. Local informado: {local}.",
+                responsavel_rd_id=settings.thundera_lite_owner_rd_id,
+                criado_por_rd_id=settings.thundera_lite_owner_rd_id,
+                prazo=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        except Exception:  # noqa: BLE001 -- o card ja existe; a tarefa e so um complemento
+            logger.exception("Thundera Lite: falha ao anotar o local do lead (negociacao %s).", negociacao["id"])
+
+    return {"status": "ok", "deal_id": negociacao["id"]}
 
 
 @eventos_app.patch("/leads/{client_id}")

@@ -310,6 +310,17 @@ class Settings(BaseSettings):
     # outros, so este.
     rd_pipeline_maquina_isp_qualificacao_rd_id: str = "687fe8cbd5677c001aa540b2"
 
+    # --- Lead do formulario do site Thundera IA Lite (api/routes/eventos.py,
+    # POST /eventos/thundera-leads) -- SO cria organizacao+contato+negociacao no
+    # funil abaixo; ao contrario de /eventos/leads (Maquina.ISP), nao aciona
+    # nenhum agente de WhatsApp (sem template aprovado pra isso ainda).
+    # IDs confirmados em 10/11/2026 direto em crm_pipelines/crm_stages.
+    rd_pipeline_thundera_lite_rd_id: str = "6af22577d10c350024214b13"  # [ThunderaLite] - Qualificacao
+    rd_stage_thundera_lite_entrada_rd_id: str = "6af22578d10c350024214b15"  # Primeira conexao
+    # Dono padrao das negociacoes criadas por este formulario -- decisao do
+    # usuario em 10/11/2026 (Eliverto Schontz Moraes).
+    thundera_lite_owner_rd_id: str = "6a42559e40a047001d6ce599"
+
     # Etapa "No-show" do pipeline acima -- pra onde a negociacao vai quando a
     # reuniao marcada passa do horario e a tarefa continua "open" no RD (ninguem
     # marcou como concluida) -- sinal de que a reuniao nao aconteceu.
