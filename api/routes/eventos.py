@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from database.connection import get_db
 from database.models import EventoLead
-from ingestion.rd_crm.actions import criar_negociacao_com_contato, criar_tarefa
+from ingestion.rd_crm.actions import criar_negociacao_com_contato, criar_nota, criar_tarefa
 from whatsapp import evento
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,7 @@ class ThunderaLeadEntrada(BaseModel):
     pais: str | None = Field(default=None, max_length=80)
     estado: str | None = Field(default=None, max_length=120)
     cidade: str | None = Field(default=None, max_length=120)
+    observacoes: str | None = Field(default=None, max_length=2000)
 
 
 # Disjuntor simples (sem tabela propria: este endpoint so cria o card, nao aciona
@@ -179,6 +180,17 @@ def criar_lead_thundera(dados: ThunderaLeadEntrada, db: Session = Depends(get_db
             )
         except Exception:  # noqa: BLE001 -- o card ja existe; a tarefa e so um complemento
             logger.exception("Thundera Lite: falha ao anotar o local do lead (negociacao %s).", negociacao["id"])
+
+    observacoes = (dados.observacoes or "").strip()
+    if observacoes:
+        try:
+            criar_nota(
+                db, negociacao["id"],
+                texto=observacoes,
+                autor_rd_id=settings.thundera_lite_owner_rd_id,
+            )
+        except Exception:  # noqa: BLE001 -- o card ja existe; a nota e so um complemento
+            logger.exception("Thundera Lite: falha ao criar a nota de observacoes (negociacao %s).", negociacao["id"])
 
     return {"status": "ok", "deal_id": negociacao["id"]}
 

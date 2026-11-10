@@ -146,6 +146,21 @@ def atualizar_prazo_tarefa(db: Session, task_rd_id: str, *, prazo: datetime) -> 
     return resposta["data"]
 
 
+def criar_nota(db: Session, deal_rd_id: str, *, texto: str, autor_rd_id: str) -> dict:
+    """Cria uma anotacao (nota) vinculada a uma negociacao -- diferente de
+    `criar_tarefa`: uma nota e so um registro de texto no historico do card
+    (a aba "Anotações" no RD), sem responsavel nem prazo, sem gerar pendencia
+    pra ninguem. Endpoint confirmado na documentacao oficial (POST
+    /deals/{deal_id}/notes, corpo {"data": {"description", "user_id"}}) --
+    AINDA NAO validado contra a API real (sem negociacao de teste disponivel
+    pra isso), ao contrario das demais funcoes deste modulo."""
+    client = RDCrmClient(db)
+    resposta = client.post(f"/deals/{deal_rd_id}/notes", json={
+        "data": {"description": texto, "user_id": autor_rd_id},
+    })
+    return _dados(resposta)
+
+
 def arquivar_negociacao_perdida(db: Session, deal_rd_id: str, *, motivo_rd_id: str, novo_nome: str | None = None) -> dict:
     """Marca uma negociacao como perdida (status='lost'). Usado pra "limpar"
     negociacoes de teste (a API do RD nao tem DELETE pra /deals) e, no uso
